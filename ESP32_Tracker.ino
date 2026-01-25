@@ -1,20 +1,21 @@
 #include <HardwareSerial.h>
 
 // ----------------------------------------------------------------
-//  SETTINGS FOR ESP32-C3 + A7670C (NTFY.SH HTTP POST)
+//  A7670C DIRECT TO VERCEL (SSL/HTTPS)
 // ----------------------------------------------------------------
 #define MODEM_RX_PIN 9
 #define MODEM_TX_PIN 10
 
 HardwareSerial SerialAT(1);
 
-String url = "http://ntfy.sh/gps-tracker-hub-8376c"; 
-String deviceId = "A7670C_01";
+// *** ใส่ Vercel URL ของพี่ตรงนี้ *** 
+// เช่น "https://gps-tracker-abcd.vercel.app/api/track"
+String vercelUrl = "YOUR_VERCEL_URL_HERE/api/track"; 
 
+String deviceId = "A7670C_DIRECT";
 unsigned long lastTime = 0;
 unsigned long timerDelay = 10000; 
 
-// Helper to wait for response
 String waitForResponse(String expected, unsigned long timeout) {
   unsigned long start = millis();
   String response = "";
@@ -29,55 +30,65 @@ String waitForResponse(String expected, unsigned long timeout) {
 }
 
 void initModem() {
-  Serial.println(">> Initializing Modem...");
+  Serial.println(">> Init Modem (Direct Vercel SSL)...");
   SerialAT.println("AT");
   delay(500);
-  SerialAT.println("AT+HTTPTERM"); // Close previous if any
+  SerialAT.println("AT+HTTPTERM");
   delay(500);
-  
-  // Clean Buffer
   while(SerialAT.available()) SerialAT.read();
   
   SerialAT.println("AT+HTTPINIT");
   waitForResponse("OK", 5000);
   
-  SerialAT.println("AT+HTTPPARA=\"URL\",\"" + url + "\"");
+  // Basic SSL Config for A7670C (Ignore Cert Check)
+  // 0 = No SSL, 1 = SSL without Context, ... depends on firmware
+  // Usually AT+HTTPSSL=1 works for A7670C Series
+  Serial.println(">> Enabling SSL...");
+  SerialAT.println("AT+HTTPSSL=1"); 
+  waitForResponse("OK", 5000);
+  
+  SerialAT.println("AT+HTTPPARA=\"URL\",\"" + vercelUrl + "\"");
+  waitForResponse("OK", 5000);
+  
+  // Important: Set Content-Type to text/plain for our CSV API
+  SerialAT.println("AT+HTTPPARA=\"CONTENT\",\"text/plain\"");
   waitForResponse("OK", 5000);
 }
 
 void setup() {
   Serial.begin(115200);
   SerialAT.begin(115200, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
-  delay(5000); // Wait for modem boot
+  delay(5000);
   
   initModem();
 }
 
 void loop() {
-  // Check if modem reset itself (Power issue check)
+  // Auto-Recovery
   if (SerialAT.available()) {
     String line = SerialAT.readStringUntil('\n');
-    Serial.print("MODEM: "); Serial.println(line);
     if (line.indexOf("*ATREADY") != -1 || line.indexOf("PB DONE") != -1) {
-       Serial.println(">> Modem Reset Detected! Re-initializing...");
+       Serial.println(">> Modem Reset! Re-init...");
        delay(2000);
        initModem();
     }
   }
 
   if ((millis() - lastTime) > timerDelay) {
-    
-    // Gen Data
+    if (vercelUrl.indexOf("YOUR_VERCEL") != -1) {
+       Serial.println(">> PLEASE SET VERCEL URL IN CODE <<");
+       lastTime = millis();
+       return;
+    }
+
     float lat = 13.555 + (random(0,100)/1000.0);
     float lng = 100.555 + (random(0,100)/1000.0);
-    String dataMsg = deviceId + "," + String(lat,6) + "," + String(lng,6) + ",ACTIVE";
     
-    Serial.println("\n--- Sending Data ---");
+    // CSV Format: ID, LAT, LNG, STATUS
+    String dataMsg = deviceId + "," + String(lat,6) + "," + String(lng,6) + ",DIRECT_SSL";
+    
+    Serial.println("\n--- Sending Direct to Vercel ---");
     Serial.println(dataMsg);
-    
-    // 1. Prepare Data
-    // We check if AT+HTTPDATA gives DOWNLOAD or ERROR
-    // If ERROR, we might need to Re-Init
     
     SerialAT.print("AT+HTTPDATA=");
     SerialAT.print(dataMsg.length());
@@ -86,15 +97,13 @@ void loop() {
     String resp = waitForResponse("DOWNLOAD", 3000);
     
     if (resp.indexOf("DOWNLOAD") != -1) {
-      // 2. Send Actual Data
       SerialAT.print(dataMsg);
       waitForResponse("OK", 3000);
       
-      // 3. POST Action
-      SerialAT.println("AT+HTTPACTION=1");
+      SerialAT.println("AT+HTTPACTION=1"); // POST
       
     } else {
-      Serial.println(">> Failed to get DOWNLOAD prompt. Re-initializing...");
+      Serial.println(">> Failed to get DOWNLOAD. Re-init...");
       initModem();
     }
     
