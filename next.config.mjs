@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // output: 'export', // Disabled for Vercel (Serverless)
+  output: 'export', // Enabled for VPS (Static)
   images: { unoptimized: true },
 };
 

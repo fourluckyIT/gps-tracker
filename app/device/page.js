@@ -3,11 +3,9 @@
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { db } from "../../lib/firebase";
-import { collection, query, where, getDocs, orderBy, limit } from "firebase/firestore";
 
-// Ntfy Topic Name
-const TOPIC_NAME = "gps-tracker-hub-8376c";
+// VPS Configuration
+const API_URL = "http://143.14.200.117/api";
 
 function DeviceHistoryContent() {
     const searchParams = useSearchParams();
@@ -19,107 +17,24 @@ function DeviceHistoryContent() {
     useEffect(() => {
         if (!deviceId) return;
 
-        const streamUrl = `https://ntfy.sh/${TOPIC_NAME}/sse`;
-        console.log("Loading history for:", deviceId);
-
-        const loadData = async () => {
-            const combinedLogs = [];
-            const seenIds = new Set();
-
-            // 1. Fetch Permanent History from Firebase (Firestore)
+        // Poll History from VPS
+        const fetchHistory = async () => {
             try {
-                const q = query(
-                    collection(db, "logs"),
-                    where("device_id", "==", deviceId),
-                    orderBy("timestamp", "desc"),
-                    limit(100)
-                );
-                const querySnapshot = await getDocs(q);
-                querySnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    if (!seenIds.has(data.ntfy_id)) {
-                        combinedLogs.push({
-                            id: data.ntfy_id,
-                            timestamp: new Date(data.timestamp).toLocaleString(),
-                            rawContent: data.raw_content,
-                            source: 'firebase'
-                        });
-                        seenIds.add(data.ntfy_id);
-                    }
-                });
-                console.log(`Loaded ${querySnapshot.size} logs from Firebase`);
-            } catch (err) {
-                console.error("Firebase fetch error:", err);
-            }
-
-            // 2. Fetch BUFFER from Ntfy (Archive)
-            try {
-                const res = await fetch(`https://ntfy.sh/${TOPIC_NAME}/json?poll=1&since=all`);
-                const text = await res.text();
-                const lines = text.trim().split('\n');
-
-                const ntfyLogs = [];
-                lines.forEach(line => {
-                    if (!line) return;
-                    try {
-                        const data = JSON.parse(line);
-                        if (data.event === 'message' && data.message) {
-                            const parts = data.message.split(',');
-                            if (parts.length >= 1 && parts[0]?.trim() === deviceId) {
-                                if (!seenIds.has(data.id)) {
-                                    ntfyLogs.push({
-                                        id: data.id,
-                                        timestamp: new Date(data.time * 1000).toLocaleString(),
-                                        rawContent: parts.slice(1).join(', '),
-                                        source: 'ntfy-buffer'
-                                    });
-                                    seenIds.add(data.id);
-                                }
-                            }
-                        }
-                    } catch (e) { }
-                });
-
-                // Combine: Ntfy (Newest) + Firebase (Oldest)
-                // Note: Ntfy gives oldest-first. We reverse it.
-                combinedLogs.unshift(...ntfyLogs.reverse());
-
-            } catch (err) {
-                console.error("Ntfy fetch error:", err);
-            }
-
-            setHistory(combinedLogs);
-            setLoading(false);
-        };
-
-        loadData();
-
-        // 3. Realtime Stream
-        const eventSource = new EventSource(streamUrl);
-
-        eventSource.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.event === 'message' && data.message) {
-                    const parts = data.message.split(',');
-                    if (parts.length >= 1 && parts[0]?.trim() === deviceId) {
-                        setHistory(prev => {
-                            if (prev.some(p => p.id === data.id)) return prev;
-
-                            const newLog = {
-                                id: data.id,
-                                timestamp: new Date(data.time * 1000).toLocaleString(),
-                                rawContent: parts.slice(1).join(', '),
-                                source: 'live'
-                            };
-                            return [newLog, ...prev];
-                        });
-                    }
+                const res = await fetch(`${API_URL}/history/${deviceId}?limit=50`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setHistory(data);
+                    setLoading(false);
                 }
-            } catch (e) { }
+            } catch (error) {
+                console.error("Error fetching history:", error);
+            }
         };
 
-        return () => eventSource.close();
+        fetchHistory(); // 1st call
+        const interval = setInterval(fetchHistory, 2000); // Poll every 2s
+
+        return () => clearInterval(interval);
     }, [deviceId]);
 
     if (!deviceId) return <div className="loading">Invalid Device ID</div>;
@@ -141,11 +56,11 @@ function DeviceHistoryContent() {
             </div>
 
             <div className="dashboard-card">
-                {loading && <div className="loading">Syncing history (Cloud + Stream)...</div>}
+                {loading && <div className="loading">Syncing with VPS Database...</div>}
 
                 {!loading && history.length === 0 && (
                     <div style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>
-                        No history found. Waiting for data...
+                        No history found for this device.
                     </div>
                 )}
 
@@ -153,8 +68,9 @@ function DeviceHistoryContent() {
                     <table className="device-table">
                         <thead>
                             <tr>
-                                <th>Time Recieved</th>
-                                <th>Data Payload</th>
+                                <th>Timestamp</th>
+                                <th>Coordinates (Lat, Lng)</th>
+                                <th>Raw Data</th>
                                 <th>Source</th>
                             </tr>
                         </thead>
@@ -162,13 +78,16 @@ function DeviceHistoryContent() {
                             {history.map((log) => (
                                 <tr key={log.id}>
                                     <td style={{ color: '#a1a1aa', width: '200px' }}>
-                                        {log.timestamp}
+                                        {new Date(log.timestamp).toLocaleString()}
+                                    </td>
+                                    <td style={{ color: 'var(--primary)', fontWeight: 'bold' }}>
+                                        {log.lat}, {log.lng}
                                     </td>
                                     <td style={{ fontFamily: 'monospace', color: 'var(--secondary)' }}>
-                                        {log.rawContent}
+                                        {log.raw_data}
                                     </td>
                                     <td style={{ fontSize: '0.8rem', opacity: 0.5 }}>
-                                        {log.source === 'firebase' ? '🔒 Cloud DB' : (log.source === 'live' ? '⚡️ Live' : '📡 Ntfy')}
+                                        💾 VPS DB
                                     </td>
                                 </tr>
                             ))}

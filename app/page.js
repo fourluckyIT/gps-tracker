@@ -1,125 +1,127 @@
 "use client";
-
 import { useEffect, useState } from "react";
-import { db } from "../lib/firebase"; // Import Firestore
-import { doc, setDoc } from "firebase/firestore";
+import { io } from "socket.io-client";
 
-// Ntfy Topic Name (Must be unique)
-const TOPIC_NAME = "gps-tracker-hub-8376c";
+// VPS URL (Socket)
+const SERVER_URL = "http://143.14.200.117";
+const STORAGE_KEY = "gps_tracker_devices";
 
 export default function Home() {
-  const [devicesMap, setDevicesMap] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [devices, setDevices] = useState({});
+  const [connected, setConnected] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
+  // Load from localStorage on mount
   useEffect(() => {
-    // Connect to ntfy.sh SSE API
-    const streamUrl = `https://ntfy.sh/${TOPIC_NAME}/sse`;
-    console.log("Listening to stream:", streamUrl);
-
-    const eventSource = new EventSource(streamUrl);
-
-    eventSource.onopen = () => {
-      setLoading(false);
-    };
-
-    eventSource.onmessage = async (event) => {
+    setMounted(true);
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
       try {
-        const data = JSON.parse(event.data);
-
-        if (data.event === 'message' && data.message) {
-          const rawText = data.message;
-          const parts = rawText.split(',');
-
-          if (parts.length >= 1) {
-            const id = parts[0]?.trim();
-            const content = parts.slice(1).join(', ');
-            const timestamp = new Date(data.time * 1000).toISOString();
-
-            // 1. Update React State
-            setDevicesMap(prev => ({
-              ...prev,
-              [id]: {
-                deviceId: id,
-                rawContent: content,
-                originalRaw: rawText,
-                lastUpdated: timestamp
-              }
-            }));
-
-            // 2. FORCE SYNC TO FIREBASE (Cloud Bridge)
-            // We use the Ntfy Message ID as the Doc ID (Idempotent)
-            try {
-              await setDoc(doc(db, "logs", data.id), {
-                ntfy_id: data.id,
-                device_id: id,
-                raw_content: content,
-                timestamp: timestamp,
-                created_at: new Date()
-              });
-              console.log("Synced to Firebase:", data.id);
-            } catch (err) {
-              console.error("Firebase Sync Error:", err);
-            }
-          }
-        }
+        setDevices(JSON.parse(saved));
       } catch (e) {
-        console.error("Parse error", e);
+        console.error("Failed to parse saved devices:", e);
       }
-    };
-
-    return () => eventSource.close();
+    }
   }, []);
 
-  const devices = Object.values(devicesMap).sort((a, b) =>
-    new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime()
+  // Save to localStorage whenever devices change
+  useEffect(() => {
+    if (mounted && Object.keys(devices).length > 0) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(devices));
+    }
+  }, [devices, mounted]);
+
+  useEffect(() => {
+    // 1. Connect to Socket
+    console.log("Connecting to Socket...");
+    const socket = io(SERVER_URL, {
+      transports: ["websocket"], // Force WebSocket for speed
+      reconnectionAttempts: 5
+    });
+
+    socket.on("connect", () => {
+      console.log("Socket Connected!");
+      setConnected(true);
+    });
+
+    socket.on("disconnect", () => {
+      console.log("Socket Disconnected");
+      setConnected(false);
+    });
+
+    // 2. Listen for Realtime Pushes
+    socket.on("device_update", (data) => {
+      // data = { device_id, lat, lng, status, raw, ... }
+      setDevices((prev) => ({
+        ...prev,
+        [data.device_id]: data // Auto Upsert/Overwrite
+      }));
+    });
+
+    // 3. Initial Fetch (Snapshot)
+    fetch(`${SERVER_URL}/api/devices`)
+      .then(res => res.json())
+      .then(data => {
+        const map = {};
+        data.forEach(d => map[d.device_id] = d);
+        setDevices(prev => ({ ...map, ...prev }));
+      })
+      .catch(err => console.error("Snapshot failed:", err));
+
+    return () => socket.disconnect();
+  }, []);
+
+  // Sort by time (Newest top)
+  const sortedList = Object.values(devices).sort((a, b) =>
+    new Date(b.last_update) - new Date(a.last_update)
   );
 
   return (
-    <main className="container">
-      <h1>Realtime GPS Stream (Ntfy + Firebase Sync)</h1>
-
-      <div className="dashboard-card">
-        {loading ? (
-          <div className="loading">Waiting for satellite stream...</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="device-table">
-              <thead>
-                <tr>
-                  <th>Device ID</th>
-                  <th>Last Update</th>
-                  <th>Data Content</th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.map((device) => (
-                  <tr key={device.deviceId} style={{ cursor: 'pointer', transition: 'background 0.2s' }}
-                    onClick={() => window.location.href = `/device?id=${device.deviceId}`}>
-                    <td style={{ fontWeight: 600, color: 'var(--primary)', textDecoration: 'underline', textUnderlineOffset: '4px' }}>
-                      {device.deviceId} ↗
-                    </td>
-                    <td style={{ color: '#a1a1aa', whiteSpace: 'nowrap' }}>
-                      {device.lastUpdated
-                        ? new Date(device.lastUpdated).toLocaleTimeString()
-                        : 'Just now'}
-                    </td>
-                    <td style={{ fontFamily: 'monospace', color: 'var(--primary)' }}>
-                      {device.rawContent || device.originalRaw}
-                    </td>
-                  </tr>
-                ))}
-                {devices.length === 0 && (
-                  <tr>
-                    <td colSpan={3} style={{ textAlign: 'center', padding: '4rem', color: '#52525b' }}>
-                      {/* Empty State */}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+    <main>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1>SYSTEM_MONITOR_V2</h1>
+        <div style={{ color: connected ? '#00ff9d' : '#ff0055' }}>
+          ● {connected ? 'REALTIME_SOCKET' : 'DISCONNECTED'}
+        </div>
       </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>DEVICE ID (LINK)</th>
+            <th>STATUS</th>
+            <th>LAT / LNG</th>
+            <th>LAST UPDATE</th>
+            <th>RAW DATA</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sortedList.length === 0 && (
+            <tr><td colSpan={5} className="loading">Waiting for data stream...</td></tr>
+          )}
+          {sortedList.map((d) => (
+            <tr key={d.device_id}>
+              <td>
+                <a href={`/device?id=${d.device_id}`} target="_blank" rel="noopener noreferrer">
+                  [{d.device_id}] ↗
+                </a>
+              </td>
+              <td className={d.status === 'WALKING' ? 'status-active' : ''}>
+                {d.status || 'Active'}
+              </td>
+              <td style={{ fontFamily: 'monospace' }}>
+                {d.lat?.toFixed(6)}, {d.lng?.toFixed(6)}
+              </td>
+              <td>
+                {new Date(d.last_update).toLocaleTimeString()}
+              </td>
+              <td style={{ opacity: 0.5, fontSize: '0.8rem' }}>
+                {d.raw || '-'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </main>
   );
 }
