@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'export', // Enabled for VPS (Static)
-  images: { unoptimized: true },
+  // output: 'export', // Removed for Custom Server (SSR)
+  // images: { unoptimized: true },
 };
 
 export default nextConfig;

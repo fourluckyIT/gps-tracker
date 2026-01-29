@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, Suspense, useRef } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from 'next/link';
 import { GoogleMap, useJsApiLoader, Marker, Circle } from "@react-google-maps/api";
 import { io } from "socket.io-client";
 import toast, { Toaster } from "react-hot-toast";
@@ -10,7 +11,10 @@ import {
 } from "lucide-react";
 
 // Config
-const SERVER_URL = "http://143.14.200.117";
+// Config
+const SERVER_URL = typeof window !== 'undefined'
+    ? window.location.origin
+    : "http://143.14.200.117";
 const GOOGLE_MAPS_API_KEY = "AIzaSyACWF7KC20kJzTuxl-AicAuANdZaP7U74Q";
 
 const defaultCenter = { lat: 13.7563, lng: 100.5018 }; // Bangkok
@@ -42,6 +46,7 @@ function MapContent() {
     // Map state
     const [map, setMap] = useState(null);
     const [carPosition, setCarPosition] = useState(null);
+    const [carStatus, setCarStatus] = useState(""); // Add Status State
     const [connected, setConnected] = useState(false);
 
     // Car name & parking time
@@ -68,10 +73,28 @@ function MapContent() {
     const [carInGeofence, setCarInGeofence] = useState(null);
     const [prevCarInGeofence, setPrevCarInGeofence] = useState(null);
 
-    // Load Google Maps
+    // Address state (Moved to top)
+    const [address, setAddress] = useState("กำลังค้นหาที่อยู่...");
+
+    // Load Google Maps (Force Thai)
     const { isLoaded, loadError } = useJsApiLoader({
         googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+        language: "th", // Force Thai language
     });
+
+    // Reverse Geocoding Effect (Safe to be here)
+    useEffect(() => {
+        if (!carPosition || !isLoaded || !window.google) return;
+
+        const geocoder = new window.google.maps.Geocoder();
+        geocoder.geocode({ location: carPosition }, (results, status) => {
+            if (status === "OK" && results[0]) {
+                setAddress(results[0].formatted_address);
+            } else {
+                setAddress("ไม่พบข้อมูลที่อยู่");
+            }
+        });
+    }, [carPosition, isLoaded]);
 
     // Load data from localStorage on mount
     useEffect(() => {
@@ -125,6 +148,8 @@ function MapContent() {
             if (data.device_id === deviceId) {
                 const newPos = { lat: data.lat, lng: data.lng };
                 setCarPosition(newPos);
+                setCarStatus(data.status); // Update Status
+                setCarStatus(data.status); // Update Status
 
                 // Check if car moved more than 20 meters
                 if (lastPosition) {
@@ -246,17 +271,27 @@ function MapContent() {
     };
 
     // Save geofence from popup
+    // Save geofence from popup (with Address Decoding)
     const saveGeofence = () => {
-        const newGeofences = [...geofences];
-        newGeofences[popupIndex] = {
-            name: geofences[popupIndex]?.name || GEOFENCE_NAMES[popupIndex],
-            lat: popupPosition.lat,
-            lng: popupPosition.lng,
-            radius: popupRadius,
-        };
-        setGeofences(newGeofences);
-        setPopupOpen(false);
-        toast.success(`บันทึก ${GEOFENCE_NAMES[popupIndex]} แล้ว`);
+        const geocoder = new window.google.maps.Geocoder();
+        geocoder.geocode({ location: popupPosition }, (results, status) => {
+            let addr = "";
+            if (status === "OK" && results[0]) {
+                addr = results[0].formatted_address;
+            }
+
+            const newGeofences = [...geofences];
+            newGeofences[popupIndex] = {
+                name: geofences[popupIndex]?.name || GEOFENCE_NAMES[popupIndex],
+                lat: popupPosition.lat,
+                lng: popupPosition.lng,
+                radius: popupRadius,
+                address: addr
+            };
+            setGeofences(newGeofences);
+            setPopupOpen(false);
+            toast.success(`บันทึก ${GEOFENCE_NAMES[popupIndex]} แล้ว`);
+        });
     };
 
     // Delete geofence
@@ -321,26 +356,26 @@ function MapContent() {
                 </div>
             </div>
 
-            {/* Main Map (3.6/5 = 72% height) */}
-            <div className="map-section">
+            {/* Main Map (Expanded to fill more space, pushing info down) */}
+            <div className="map-section" style={{ flex: 1, marginBottom: '0' }}>
                 <GoogleMap
                     mapContainerStyle={{ width: "100%", height: "100%" }}
                     center={carPosition || defaultCenter}
                     zoom={16}
-                    options={{
-                        disableDefaultUI: true,
-                        zoomControl: false,
-                    }}
+                    options={{ disableDefaultUI: true, zoomControl: false }}
                     onLoad={onMainMapLoad}
                 >
-                    {/* Car Marker */}
+                    {/* Car Marker & Geofences (Same as before) -- Keeping existing children */}
                     {carPosition && (
                         <Marker
                             position={carPosition}
                             icon={{
                                 url: "data:image/svg+xml," + encodeURIComponent(`
                                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
-                                        <circle cx="20" cy="20" r="18" fill="#3B82F6" stroke="white" stroke-width="3"/>
+                                        <circle cx="20" cy="20" r="18" fill="${(carStatus || "").includes("STOLEN") ? "#EF4444" :
+                                        (carStatus || "").includes("CRASH") ? "#F97316" :
+                                            "#3B82F6"
+                                    }" stroke="white" stroke-width="3"/>
                                         <text x="20" y="26" text-anchor="middle" fill="white" font-size="16">🚗</text>
                                     </svg>
                                 `),
@@ -349,8 +384,6 @@ function MapContent() {
                             }}
                         />
                     )}
-
-                    {/* Geofence Circles */}
                     {geofences.map((gf, index) =>
                         gf ? (
                             <Circle
@@ -369,25 +402,33 @@ function MapContent() {
                     )}
                 </GoogleMap>
 
-                {/* Floating button - go to MY location */}
+                {/* FAB */}
                 <button
                     className="fab-mylocation"
                     onClick={() => {
+                        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+                            toast.error("⚠️ ต้องใช้ HTTPS (แม่กุญแจ) ถึงจะระบุตำแหน่งได้ครับ");
+                            return;
+                        }
+
                         if (navigator.geolocation) {
+                            toast.loading("กำลังระบุตำแหน่ง...", { id: 'geo_load' });
                             navigator.geolocation.getCurrentPosition(
                                 (position) => {
-                                    const pos = {
-                                        lat: position.coords.latitude,
-                                        lng: position.coords.longitude,
-                                    };
+                                    toast.dismiss('geo_load');
+                                    const pos = { lat: position.coords.latitude, lng: position.coords.longitude };
                                     map?.panTo(pos);
                                     map?.setZoom(17);
                                     toast.success("ไปยังตำแหน่งของคุณแล้ว");
                                 },
-                                () => {
-                                    toast.error("ไม่สามารถระบุตำแหน่งได้");
+                                (err) => {
+                                    toast.dismiss('geo_load');
+                                    console.error(err);
+                                    toast.error("ไม่ได้รับอนุญาตให้เข้าถึงตำแหน่ง หรือ GPS ปิดอยู่");
                                 }
                             );
+                        } else {
+                            toast.error("Browser นี้ไม่รองรับการระบุตำแหน่ง");
                         }
                     }}
                 >
@@ -395,58 +436,78 @@ function MapContent() {
                 </button>
             </div>
 
-            {/* Info Section */}
-            <div className="info-section">
-                {/* Car Name */}
-                <div className="info-card car-name-card">
-                    <Car size={24} className="info-icon" />
-                    <div className="info-content">
-                        {isEditingName ? (
-                            <input
-                                type="text"
-                                value={carName}
-                                onChange={(e) => setCarName(e.target.value)}
-                                onBlur={() => setIsEditingName(false)}
-                                onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
-                                autoFocus
-                                className="name-input"
-                            />
-                        ) : (
-                            <div className="car-name" onClick={() => setIsEditingName(true)}>
-                                {carName || "กดเพื่อตั้งชื่อ"}
-                                <Edit3 size={14} className="edit-icon" />
-                            </div>
-                        )}
-                        <div className="info-label">ชื่อรถ (กดเพื่อแก้ไข)</div>
-                    </div>
+            {/* New Info Section (Replacing old layout) */}
+            <div className="info-section" style={{ background: '#111', borderTop: '1px solid #333' }}>
+
+                {/* Car Name Row */}
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+                    <Car size={20} color="#4ECDC4" style={{ marginRight: '8px' }} />
+                    {isEditingName ? (
+                        <input
+                            type="text"
+                            value={carName}
+                            onChange={(e) => setCarName(e.target.value)}
+                            onBlur={() => setIsEditingName(false)}
+                            onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
+                            autoFocus
+                            className="name-input"
+                        />
+                    ) : (
+                        <div className="car-name" onClick={() => setIsEditingName(true)} style={{ fontSize: '1.1rem' }}>
+                            {carName || "ตั้งชื่อรถ"}
+                            <Edit3 size={14} style={{ marginLeft: '5px', opacity: 0.5 }} />
+                        </div>
+                    )}
                 </div>
 
-                {/* Parking Status */}
-                <div className="info-card parking-card">
-                    <Clock size={24} className="info-icon" />
-                    <div className="info-content">
-                        <div className="parking-time">{parkingDisplay || "กำลังโหลด..."}</div>
-                        <div className="info-label">
-                            {carInGeofence ? `จอดอยู่ที่: ${carInGeofence.name}` : "จอดอยู่ (ไม่ขยับเกิน 20m)"}
-                        </div>
-                    </div>
-                </div>
+                {/* Status Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px', background: '#222', padding: '12px', borderRadius: '12px' }}>
 
-                {/* Geofence Status */}
-                <div className="geofence-badges">
-                    {geofences.map((gf, index) => (
-                        <div
-                            key={index}
-                            className={`geofence-badge ${gf ? "active" : "empty"} ${carInGeofence?.index === index ? "current" : ""}`}
-                            style={{ borderColor: GEOFENCE_COLORS[index] }}
-                        >
-                            <span
-                                className="badge-dot"
-                                style={{ background: gf ? GEOFENCE_COLORS[index] : "#444" }}
-                            />
-                            {gf ? gf.name : `ว่าง`}
-                        </div>
-                    ))}
+                    {/* Time */}
+                    <div style={{ display: 'flex', alignItems: 'center', color: '#ccc', fontSize: '0.9rem' }}>
+                        <Clock size={16} style={{ marginRight: '8px', color: '#888' }} />
+                        <span>ล่าสุด: {parkingStartTime ? new Date(parkingStartTime).toLocaleTimeString() : "-"}</span>
+                    </div>
+
+                    {/* Address (Replaces Coords) */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', color: '#ccc', fontSize: '0.9rem' }}>
+                        <MapPin size={16} style={{ marginRight: '8px', color: '#888', marginTop: '3px' }} />
+                        <span style={{ lineHeight: '1.4' }}>{address}</span>
+                    </div>
+
+                    {/* Parking Duration */}
+                    <div style={{ display: 'flex', alignItems: 'center', color: '#FFE66D', fontWeight: 'bold', fontSize: '1rem', marginTop: '4px' }}>
+                        <Crosshair size={16} style={{ marginRight: '8px' }} />
+                        <span>จอดนาน: {parkingDisplay}</span>
+                    </div>
+
+                    {/* Focus Button */}
+                    <button
+                        onClick={() => {
+                            if (carPosition && map) {
+                                map.panTo(carPosition);
+                                map.setZoom(18);
+                                toast.success("Focus 🚗");
+                            }
+                        }}
+                        style={{
+                            marginTop: '8px',
+                            width: '100%',
+                            padding: '10px',
+                            background: '#4ECDC4',
+                            border: 'none',
+                            borderRadius: '8px',
+                            color: '#000',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '5px'
+                        }}
+                    >
+                        <Crosshair size={18} /> โฟกัสตำแหน่งรถ
+                    </button>
                 </div>
             </div>
 
@@ -460,6 +521,71 @@ function MapContent() {
                 </div>
 
                 <div className="menu-section">
+                    <h3><Car size={18} /> สถานะปัจจุบัน</h3>
+                    <div className="status-card" style={{ background: '#222', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
+                        <p style={{ margin: '5px 0', fontSize: '0.9rem', color: '#ccc' }}>
+                            <Clock size={14} style={{ display: 'inline', marginRight: '5px' }} />
+                            ล่าสุด: {parkingStartTime ? new Date(parkingStartTime).toLocaleTimeString() : "-"}
+                        </p>
+                        <p style={{ margin: '5px 0', fontSize: '0.9rem', color: '#ccc' }}>
+                            <MapPin size={14} style={{ display: 'inline', marginRight: '5px' }} />
+                            พิกัด: {carPosition ? `${carPosition.lat.toFixed(5)}, ${carPosition.lng.toFixed(5)}` : "-"}
+                        </p>
+                        <p style={{ margin: '5px 0', fontSize: '0.9rem', color: '#FFE66D', fontWeight: 'bold' }}>
+                            <Crosshair size={14} style={{ display: 'inline', marginRight: '5px' }} />
+                            จอดนาน: {parkingDisplay}
+                        </p>
+
+                        <button
+                            onClick={() => {
+                                if (carPosition && map) {
+                                    map.panTo(carPosition);
+                                    map.setZoom(18);
+                                    setMenuOpen(false);
+                                    toast.success("Focus ไปที่รถแล้ว 🚗");
+                                }
+                            }}
+                            style={{
+                                marginTop: '10px',
+                                width: '100%',
+                                padding: '8px',
+                                background: '#4ECDC4',
+                                border: 'none',
+                                borderRadius: '4px',
+                                color: '#000',
+                                fontWeight: 'bold',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            <Crosshair size={16} style={{ display: 'inline', marginRight: '5px', verticalAlign: 'text-bottom' }} />
+                            โฟกัสตำแหน่งรถ
+                        </button>
+                    </div>
+
+                    {/* History Link */}
+                    <h3><Clock size={18} /> ประวัติย้อนหลัง</h3>
+                    <div className="status-card" style={{ background: '#222', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
+                        <Link href={`/device?id=${deviceId || 'unknown'}`} style={{ textDecoration: 'none' }}>
+                            <button
+                                style={{
+                                    width: '100%',
+                                    padding: '10px',
+                                    background: '#333',
+                                    border: '1px solid #444',
+                                    borderRadius: '4px',
+                                    color: '#fff',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px'
+                                }}
+                            >
+                                📜 ดูประวัติการแจ้งเตือน
+                            </button>
+                        </Link>
+                    </div>
+
                     <h3><MapPin size={18} /> ตำแหน่งจอด (3 จุด)</h3>
                     <p className="menu-hint">กดเพื่อเพิ่ม/แก้ไข ปล่อยว่างได้</p>
 
@@ -480,6 +606,11 @@ function MapContent() {
                                                 onChange={(e) => updateGeofenceName(index, e.target.value)}
                                                 className="slot-name-input"
                                             />
+                                            {gf.address && (
+                                                <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px', lineHeight: '1.2' }}>
+                                                    {gf.address}
+                                                </div>
+                                            )}
                                             <span className="slot-radius">รัศมี {gf.radius}m</span>
                                         </>
                                     ) : (
@@ -868,9 +999,15 @@ function MapContent() {
                     width: 100%;
                     background: transparent;
                     border: none;
+                    border-bottom: 1px dashed #666;
                     color: white;
                     font-size: 14px;
-                    padding: 0;
+                    padding: 2px 0;
+                    margin-bottom: 4px;
+                }
+                .slot-name-input:focus {
+                    border-bottom: 1px solid #4ECDC4;
+                    outline: none;
                 }
 
                 .slot-radius {
@@ -992,8 +1129,130 @@ function MapContent() {
                     background: #3dbdb5;
                 }
             `}</style>
+            {/* Status Alert Overlay (Vibration / Crash) */}
+            {(carStatus === "2" || carStatus === "3") && (
+                <div className={`status-alert-overlay ${carStatus === "3" ? "crash" : "vibration"}`}>
+                    <div className="alert-box">
+                        <div className="alert-icon">
+                            {carStatus === "3" ? "🆘" : "⚠️"}
+                        </div>
+                        <h2>{carStatus === "3" ? "แจ้งเตือนอุบัติเหตุ!" : "ตรวจพบการสั่นสะเทือน!"}</h2>
+                        <p>{carStatus === "3" ? "รถมีการล้มหรือเอียงผิดปกติ (Code 3)" : "มีการขยับหรือสั่นสะเทือน (Code 2)"}</p>
+                        <div className="alert-time">
+                            เวลา: {new Date().toLocaleTimeString()}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            <style jsx>{`
+                /* ... existing styles ... */
+                .status-alert-overlay {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    z-index: 9999;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    backdrop-filter: blur(5px);
+                    animation: fadeIn 0.3s ease;
+                }
+                
+                .status-alert-overlay.vibration {
+                    background: rgba(255, 165, 0, 0.4);
+                }
+
+                .status-alert-overlay.crash {
+                    background: rgba(255, 0, 0, 0.6);
+                }
+
+                .alert-box {
+                    background: #111;
+                    border: 2px solid white;
+                    padding: 30px;
+                    border-radius: 20px;
+                    text-align: center;
+                    color: white;
+                    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+                    max-width: 80%;
+                    animation: pulse 1s infinite alternate;
+                }
+
+                .status-alert-overlay.crash .alert-box {
+                    border-color: #ff4444;
+                    box-shadow: 0 0 50px rgba(255, 0, 0, 0.5);
+                }
+
+                .alert-icon {
+                    font-size: 60px;
+                    margin-bottom: 20px;
+                }
+
+                .alert-box h2 {
+                    font-size: 24px;
+                    margin: 0 0 10px 0;
+                    color: #fff;
+                }
+
+                @keyframes pulse {
+                    from { transform: scale(1); }
+                    to { transform: scale(1.05); }
+                }
+
+                .alert-time {
+                    margin-top: 15px;
+                    font-size: 14px;
+                    color: #aaa;
+                }
+            `}</style>
         </div>
     );
+
+    // Sound Alert Effect (Code 3)
+    useEffect(() => {
+        let audioCtx;
+        let oscillator;
+        let gainNode;
+        let interval;
+
+        if (carStatus === "3") {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                oscillator = audioCtx.createOscillator();
+                gainNode = audioCtx.createGain();
+
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.value = 800; // Start freq
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                oscillator.start();
+
+                // Siren effect: Modulate frequency
+                let up = true;
+                interval = setInterval(() => {
+                    if (up) oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime);
+                    else oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
+                    up = !up;
+                }, 600);
+            } catch (e) {
+                console.error("Audio Playback Error:", e);
+            }
+        }
+
+        return () => {
+            if (interval) clearInterval(interval);
+            if (oscillator) {
+                try { oscillator.stop(); } catch (e) { }
+            }
+            if (audioCtx) {
+                try { audioCtx.close(); } catch (e) { }
+            }
+        };
+    }, [carStatus]);
 }
 
 export default function MapPage() {
