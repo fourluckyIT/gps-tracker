@@ -62,6 +62,10 @@ function MapContent() {
     const [geofences, setGeofences] = useState([null, null, null]);
     const [geofencesLoaded, setGeofencesLoaded] = useState(false);
 
+    // Track which geofence the car is in
+    const [carInGeofence, setCarInGeofence] = useState(null);
+    const [prevCarInGeofence, setPrevCarInGeofence] = useState(null);
+
     // Popup for adding/editing geofence
     const [popupOpen, setPopupOpen] = useState(false);
     const [popupIndex, setPopupIndex] = useState(null);
@@ -291,8 +295,8 @@ function MapContent() {
         }
     }, [carStatus]);
 
-    const isStolen = (carStatus || "").includes("STOLEN");
-    const isCrash = (carStatus || "").includes("CRASH");
+    const isStolen = (carStatus === "1" || (carStatus || "").includes("STOLEN"));
+    const isCrash = (carStatus === "2" || (carStatus || "").includes("CRASH"));
     const showAlert = (isStolen || isCrash) && !alertDismissed;
 
     // Sound Alert Effect (Stolen/Crash)
@@ -1414,87 +1418,7 @@ function MapContent() {
                     background: #3dbdb5;
                 }
             `}</style>
-            {/* Status Alert Overlay (Vibration / Crash) */}
-            {
-                (carStatus === "2" || carStatus === "3") && (
-                    <div className={`status-alert-overlay ${carStatus === "3" ? "crash" : "vibration"}`}>
-                        <div className="alert-box">
-                            <div className="alert-icon">
-                                {carStatus === "3" ? "🆘" : "⚠️"}
-                            </div>
-                            <h2>{carStatus === "3" ? "แจ้งเตือนอุบัติเหตุ!" : "ตรวจพบการสั่นสะเทือน!"}</h2>
-                            <p>{carStatus === "3" ? "รถมีการล้มหรือเอียงผิดปกติ (Code 3)" : "มีการขยับหรือสั่นสะเทือน (Code 2)"}</p>
-                            <div className="alert-time">
-                                เวลา: {new Date().toLocaleTimeString()}
-                            </div>
-                        </div>
-                    </div>
-                )
-            }
 
-            <style jsx>{`
-                /* ... existing styles ... */
-                .status-alert-overlay {
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    right: 0;
-                    bottom: 0;
-                    z-index: 9999;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    backdrop-filter: blur(5px);
-                    animation: fadeIn 0.3s ease;
-                }
-                
-                .status-alert-overlay.vibration {
-                    background: rgba(255, 165, 0, 0.4);
-                }
-
-                .status-alert-overlay.crash {
-                    background: rgba(255, 0, 0, 0.6);
-                }
-
-                .alert-box {
-                    background: #111;
-                    border: 2px solid white;
-                    padding: 30px;
-                    border-radius: 20px;
-                    text-align: center;
-                    color: white;
-                    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-                    max-width: 80%;
-                    animation: pulse 1s infinite alternate;
-                }
-
-                .status-alert-overlay.crash .alert-box {
-                    border-color: #ff4444;
-                    box-shadow: 0 0 50px rgba(255, 0, 0, 0.5);
-                }
-
-                .alert-icon {
-                    font-size: 60px;
-                    margin-bottom: 20px;
-                }
-
-                .alert-box h2 {
-                    font-size: 24px;
-                    margin: 0 0 10px 0;
-                    color: #fff;
-                }
-
-                @keyframes pulse {
-                    from { transform: scale(1); }
-                    to { transform: scale(1.05); }
-                }
-
-                .alert-time {
-                    margin-top: 15px;
-                    font-size: 14px;
-                    color: #aaa;
-                }
-            `}</style>
         </div >
     );
 
