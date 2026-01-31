@@ -69,9 +69,13 @@ function MapContent() {
     const [popupRadius, setPopupRadius] = useState(100);
     const [popupMap, setPopupMap] = useState(null);
 
-    // Track which geofence the car is in
-    const [carInGeofence, setCarInGeofence] = useState(null);
-    const [prevCarInGeofence, setPrevCarInGeofence] = useState(null);
+
+
+
+
+    // SOS State
+    const [sosNumbers, setSosNumbers] = useState(["", "", ""]);
+    const [sosLoading, setSosLoading] = useState(false);
 
     // Address state (Moved to top)
     const [address, setAddress] = useState("กำลังค้นหาที่อยู่...");
@@ -149,7 +153,11 @@ function MapContent() {
                 const newPos = { lat: data.lat, lng: data.lng };
                 setCarPosition(newPos);
                 setCarStatus(data.status); // Update Status
-                setCarStatus(data.status); // Update Status
+
+                // Refetch SOS if updated
+                if (data.sos_update) {
+                    fetchSosNumbers();
+                }
 
                 // Check if car moved more than 20 meters
                 if (lastPosition) {
@@ -179,8 +187,50 @@ function MapContent() {
             })
             .catch((err) => console.error("Initial fetch failed:", err));
 
+        // Fetch SOS Numbers
+        fetchSosNumbers();
+
         return () => socket.disconnect();
     }, [deviceId]);
+
+    const fetchSosNumbers = useCallback(() => {
+        if (!deviceId) return;
+        fetch(`${SERVER_URL}/api/device/${deviceId}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.sos_numbers && Array.isArray(data.sos_numbers)) {
+                    // Fill up to 3 slots
+                    const filled = [...data.sos_numbers, "", "", ""].slice(0, 3);
+                    setSosNumbers(filled);
+                }
+            })
+            .catch(err => console.error("SOS Fetch Error:", err));
+    }, [deviceId]);
+
+    const saveSosNumbers = () => {
+        setSosLoading(true);
+        // Filter out empty strings
+        const cleanNumbers = sosNumbers.filter(n => n.trim() !== "");
+
+        fetch(`${SERVER_URL}/api/device/${deviceId}/sos`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ numbers: cleanNumbers })
+        })
+            .then(res => res.json())
+            .then(data => {
+                setSosLoading(false);
+                if (data.success) {
+                    toast.success("บันทึกเบอร์ฉุกเฉินแล้ว");
+                } else {
+                    toast.error("บันทึกไม่สำเร็จ");
+                }
+            })
+            .catch(err => {
+                setSosLoading(false);
+                toast.error("เกิดข้อผิดพลาด");
+            });
+    };
 
     // Auto-center map on car position
     useEffect(() => {
@@ -224,6 +274,71 @@ function MapContent() {
             setPrevCarInGeofence(carInGeofence);
         }
     }, [carInGeofence]);
+
+    // Alert Logic
+    const [alertDismissed, setAlertDismissed] = useState(false);
+
+    // Reset dismiss when status changes to something critical (or distinct critical)
+    useEffect(() => {
+        if (!carStatus) return;
+        if (carStatus.includes("STOLEN") || carStatus.includes("CRASH")) {
+            // Only show if not already showing for this exact instance? 
+            // Better: If status changes type, reset.
+            // For now, simple logic: if status string changes, we might want to re-alert.
+            // But usually status is persistent. Ideally we track "last alert time" or similar.
+            // Here, we'll reset dismiss if the status changes from normal to critical.
+            setAlertDismissed(false);
+        }
+    }, [carStatus]);
+
+    const isStolen = (carStatus || "").includes("STOLEN");
+    const isCrash = (carStatus || "").includes("CRASH");
+    const showAlert = (isStolen || isCrash) && !alertDismissed;
+
+    // Sound Alert Effect (Stolen/Crash)
+    useEffect(() => {
+        let audioCtx;
+        let oscillator;
+        let gainNode;
+        let interval;
+
+        if (isStolen || isCrash) {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                oscillator = audioCtx.createOscillator();
+                gainNode = audioCtx.createGain();
+
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.value = isStolen ? 800 : 400; // Higher pitch for stolen
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                oscillator.start();
+
+                // Siren effect
+                let up = true;
+                interval = setInterval(() => {
+                    if (up) oscillator.frequency.setValueAtTime(isStolen ? 1200 : 600, audioCtx.currentTime);
+                    else oscillator.frequency.setValueAtTime(isStolen ? 800 : 400, audioCtx.currentTime);
+                    up = !up;
+                }, 600);
+            } catch (e) {
+                console.error("Audio Playback Error:", e);
+            }
+        }
+
+        return () => {
+            if (interval) clearInterval(interval);
+            if (oscillator) {
+                try { oscillator.stop(); } catch (e) { }
+            }
+            if (audioCtx) {
+                try { audioCtx.close(); } catch (e) { }
+            }
+        };
+    }, [isStolen, isCrash, carStatus]);
+
+
 
     // Format parking duration
     const formatParkingDuration = () => {
@@ -586,6 +701,54 @@ function MapContent() {
                         </Link>
                     </div>
 
+
+
+                    {/* SOS Settings */}
+                    <h3><div style={{ display: 'flex', alignItems: 'center' }}>🚨 เบอร์ฉุกเฉิน (SOS)</div></h3>
+                    <div className="status-card" style={{ background: '#222', padding: '15px', borderRadius: '8px', marginBottom: '15px' }}>
+                        <p className="menu-hint" style={{ marginBottom: '10px' }}>ระบุเบอร์โทรศัพท์สูงสุด 3 เบอร์ สำหรับปุ่มโทรฉุกเฉิน</p>
+                        {sosNumbers.map((num, idx) => (
+                            <div key={idx} style={{ marginBottom: '8px', display: 'flex', alignItems: 'center' }}>
+                                <span style={{ color: '#666', marginRight: '8px', width: '20px' }}>{idx + 1}.</span>
+                                <input
+                                    type="tel"
+                                    placeholder="ใส่เบอร์โทร..."
+                                    value={num}
+                                    onChange={(e) => {
+                                        const newSos = [...sosNumbers];
+                                        newSos[idx] = e.target.value;
+                                        setSosNumbers(newSos);
+                                    }}
+                                    style={{
+                                        flex: 1,
+                                        padding: '8px',
+                                        background: '#333',
+                                        border: '1px solid #444',
+                                        color: 'white',
+                                        borderRadius: '4px'
+                                    }}
+                                />
+                            </div>
+                        ))}
+                        <button
+                            onClick={saveSosNumbers}
+                            disabled={sosLoading}
+                            style={{
+                                width: '100%',
+                                marginTop: '10px',
+                                padding: '10px',
+                                background: sosLoading ? '#555' : '#FF6B6B',
+                                border: 'none',
+                                borderRadius: '4px',
+                                color: 'white',
+                                fontWeight: 'bold',
+                                cursor: sosLoading ? 'not-allowed' : 'pointer'
+                            }}
+                        >
+                            {sosLoading ? "กำลังบันทึก..." : "💾 บันทึกเบอร์ฉุกเฉิน"}
+                        </button>
+                    </div>
+
                     <h3><MapPin size={18} /> ตำแหน่งจอด (3 จุด)</h3>
                     <p className="menu-hint">กดเพื่อเพิ่ม/แก้ไข ปล่อยว่างได้</p>
 
@@ -637,94 +800,123 @@ function MapContent() {
                         );
                     })}
                 </div>
-            </div>
+            </div >
 
             {/* Menu Overlay */}
             {menuOpen && <div className="overlay" onClick={() => setMenuOpen(false)} />}
 
-            {/* Geofence Popup */}
-            {popupOpen && (
-                <>
-                    <div className="overlay" onClick={() => setPopupOpen(false)} />
-                    <div className="popup">
-                        <div className="popup-header">
-                            <h3 style={{ color: GEOFENCE_COLORS[popupIndex] }}>
-                                {GEOFENCE_NAMES[popupIndex]}
-                            </h3>
-                            <button onClick={() => setPopupOpen(false)}>
-                                <X size={24} />
-                            </button>
-                        </div>
+            {/* CRITICAL ALERT POPUP */}
+            {
+                showAlert && (
+                    <div className="alert-overlay">
+                        <div className="alert-box">
+                            <div className="alert-icon">
+                                {isStolen ? "🚨" : "💥"}
+                            </div>
+                            <h2>{isStolen ? "รถถูกขโมย!" : "เกิดอุบัติเหตุ!"}</h2>
+                            <p>{isStolen ? "มีการพยายามสตาร์ทรถหรือเคลื่อนย้ายโดยไม่ได้รับอนุญาต" : "ตรวจพบการชนหรือการกระแทกรุนแรง"}</p>
 
-                        <div className="popup-map">
-                            <GoogleMap
-                                mapContainerStyle={{ width: "100%", height: "100%" }}
-                                center={popupPosition}
-                                zoom={16}
-                                options={{
-                                    disableDefaultUI: true,
-                                    zoomControl: true,
-                                }}
-                                onLoad={onPopupMapLoad}
-                                onClick={(e) => {
-                                    setPopupPosition({
-                                        lat: e.latLng.lat(),
-                                        lng: e.latLng.lng(),
-                                    });
-                                }}
-                            >
-                                <Marker
-                                    position={popupPosition}
-                                    draggable={true}
-                                    onDragEnd={(e) => {
+                            <div className="alert-actions">
+                                <button className="btn-dismiss" onClick={() => setAlertDismissed(true)}>
+                                    รับทราบ (ปิดแจ้งเตือน)
+                                </button>
+                                <button className="btn-dismiss" onClick={() => setAlertDismissed(true)}>
+                                    รับทราบ (ปิดแจ้งเตือน)
+                                </button>
+                                <a href={`tel:${sosNumbers.find(n => n.trim()) || "191"}`} className="btn-call">
+                                    📞 โทรฉุกเฉิน ({sosNumbers.find(n => n.trim()) || "191"})
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* Geofence Popup */}
+            {
+                popupOpen && (
+                    <>
+                        <div className="overlay" onClick={() => setPopupOpen(false)} />
+                        <div className="popup">
+                            <div className="popup-header">
+                                <h3 style={{ color: GEOFENCE_COLORS[popupIndex] }}>
+                                    {GEOFENCE_NAMES[popupIndex]}
+                                </h3>
+                                <button onClick={() => setPopupOpen(false)}>
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="popup-map">
+                                <GoogleMap
+                                    mapContainerStyle={{ width: "100%", height: "100%" }}
+                                    center={popupPosition}
+                                    zoom={16}
+                                    options={{
+                                        disableDefaultUI: true,
+                                        zoomControl: true,
+                                    }}
+                                    onLoad={onPopupMapLoad}
+                                    onClick={(e) => {
                                         setPopupPosition({
                                             lat: e.latLng.lat(),
                                             lng: e.latLng.lng(),
                                         });
                                     }}
-                                    icon={{
-                                        url: "data:image/svg+xml," + encodeURIComponent(`
+                                >
+                                    <Marker
+                                        position={popupPosition}
+                                        draggable={true}
+                                        onDragEnd={(e) => {
+                                            setPopupPosition({
+                                                lat: e.latLng.lat(),
+                                                lng: e.latLng.lng(),
+                                            });
+                                        }}
+                                        icon={{
+                                            url: "data:image/svg+xml," + encodeURIComponent(`
                                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 50" width="40" height="50">
                                                 <path d="M20 0 C8.954 0 0 8.954 0 20 C0 35 20 50 20 50 C20 50 40 35 40 20 C40 8.954 31.046 0 20 0 Z" fill="${GEOFENCE_COLORS[popupIndex]}"/>
                                                 <circle cx="20" cy="20" r="8" fill="white"/>
                                             </svg>
                                         `),
-                                        scaledSize: { width: 40, height: 50 },
-                                        anchor: { x: 20, y: 50 },
-                                    }}
-                                />
-                                <Circle
-                                    center={popupPosition}
-                                    radius={popupRadius}
-                                    options={{
-                                        fillColor: GEOFENCE_COLORS[popupIndex],
-                                        fillOpacity: 0.3,
-                                        strokeColor: GEOFENCE_COLORS[popupIndex],
-                                        strokeOpacity: 1,
-                                        strokeWeight: 2,
-                                    }}
-                                />
-                            </GoogleMap>
-                        </div>
+                                            scaledSize: { width: 40, height: 50 },
+                                            anchor: { x: 20, y: 50 },
+                                        }}
+                                    />
+                                    <Circle
+                                        center={popupPosition}
+                                        radius={popupRadius}
+                                        options={{
+                                            fillColor: GEOFENCE_COLORS[popupIndex],
+                                            fillOpacity: 0.3,
+                                            strokeColor: GEOFENCE_COLORS[popupIndex],
+                                            strokeOpacity: 1,
+                                            strokeWeight: 2,
+                                        }}
+                                    />
+                                </GoogleMap>
+                            </div>
 
-                        <div className="popup-controls">
-                            <label>รัศมี: {popupRadius} เมตร</label>
-                            <input
-                                type="range"
-                                min="30"
-                                max="500"
-                                step="10"
-                                value={popupRadius}
-                                onChange={(e) => setPopupRadius(parseInt(e.target.value))}
-                            />
-                        </div>
+                            <div className="popup-controls">
+                                <label>รัศมี: {popupRadius} เมตร</label>
+                                <input
+                                    type="range"
+                                    min="30"
+                                    max="500"
+                                    step="10"
+                                    value={popupRadius}
+                                    onChange={(e) => setPopupRadius(parseInt(e.target.value))}
+                                />
+                            </div>
 
-                        <button className="save-btn" onClick={saveGeofence}>
-                            <Check size={20} /> บันทึก
-                        </button>
-                    </div>
-                </>
-            )}
+                            <button className="save-btn" onClick={saveGeofence}>
+                                <Check size={20} /> บันทึก
+                            </button>
+                        </div>
+                    </>
+                )
+            }
 
             <style jsx>{`
                 .app-container {
@@ -734,7 +926,100 @@ function MapContent() {
                     height: 100dvh;
                     background: #0a0a0a;
                     overflow: hidden;
+                    position: relative;
                 }
+
+                /* Alert Popup */
+                .alert-overlay {
+                    position: fixed;
+                    top: 0; left: 0; right: 0; bottom: 0;
+                    background: rgba(0, 0, 0, 0.9);
+                    z-index: 9999;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    animation: fadeIn 0.3s ease;
+                    backdrop-filter: blur(5px);
+                }
+
+                .alert-box {
+                    background: #1a1a1a;
+                    border: 2px solid ${isStolen ? '#ff4444' : '#ffaa00'};
+                    padding: 30px;
+                    border-radius: 20px;
+                    text-align: center;
+                    width: 90%;
+                    max-width: 400px;
+                    box-shadow: 0 0 50px ${isStolen ? 'rgba(255, 68, 68, 0.3)' : 'rgba(255, 170, 0, 0.3)'};
+                    animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                }
+
+                .alert-icon {
+                    font-size: 4rem;
+                    margin-bottom: 20px;
+                    animation: pulse 1s infinite;
+                    display: inline-block;
+                }
+
+                .alert-box h2 {
+                    color: ${isStolen ? '#ff4444' : '#ffaa00'};
+                    margin: 0 0 10px 0;
+                    font-size: 2rem;
+                    text-transform: uppercase;
+                    letter-spacing: 1px;
+                }
+
+                .alert-box p {
+                    color: #ccc;
+                    margin: 0 0 25px 0;
+                    font-size: 1rem;
+                    line-height: 1.5;
+                }
+
+                .alert-actions {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+
+                .btn-dismiss {
+                    background: #333;
+                    color: white;
+                    border: none;
+                    padding: 15px;
+                    border-radius: 10px;
+                    font-size: 1rem;
+                    font-weight: bold;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+                .btn-dismiss:active { transform: scale(0.98); }
+
+                .btn-call {
+                    background: ${isStolen ? '#ff4444' : '#ffaa00'};
+                    color: black;
+                    border: none;
+                    padding: 15px;
+                    border-radius: 10px;
+                    font-size: 1rem;
+                    font-weight: bold;
+                    text-decoration: none;
+                    display: block;
+                    transition: all 0.2s;
+                }
+                .btn-call:active { transform: scale(0.98); }
+
+                @keyframes pulse {
+                    0% { transform: scale(1); }
+                    50% { transform: scale(1.1); }
+                    100% { transform: scale(1); }
+                }
+                
+                @keyframes slideUp {
+                    from { transform: translateY(50px); opacity: 0; }
+                    to { transform: translateY(0); opacity: 1; }
+                }
+
 
                 .loading-screen,
                 .error-screen {
@@ -1130,20 +1415,22 @@ function MapContent() {
                 }
             `}</style>
             {/* Status Alert Overlay (Vibration / Crash) */}
-            {(carStatus === "2" || carStatus === "3") && (
-                <div className={`status-alert-overlay ${carStatus === "3" ? "crash" : "vibration"}`}>
-                    <div className="alert-box">
-                        <div className="alert-icon">
-                            {carStatus === "3" ? "🆘" : "⚠️"}
-                        </div>
-                        <h2>{carStatus === "3" ? "แจ้งเตือนอุบัติเหตุ!" : "ตรวจพบการสั่นสะเทือน!"}</h2>
-                        <p>{carStatus === "3" ? "รถมีการล้มหรือเอียงผิดปกติ (Code 3)" : "มีการขยับหรือสั่นสะเทือน (Code 2)"}</p>
-                        <div className="alert-time">
-                            เวลา: {new Date().toLocaleTimeString()}
+            {
+                (carStatus === "2" || carStatus === "3") && (
+                    <div className={`status-alert-overlay ${carStatus === "3" ? "crash" : "vibration"}`}>
+                        <div className="alert-box">
+                            <div className="alert-icon">
+                                {carStatus === "3" ? "🆘" : "⚠️"}
+                            </div>
+                            <h2>{carStatus === "3" ? "แจ้งเตือนอุบัติเหตุ!" : "ตรวจพบการสั่นสะเทือน!"}</h2>
+                            <p>{carStatus === "3" ? "รถมีการล้มหรือเอียงผิดปกติ (Code 3)" : "มีการขยับหรือสั่นสะเทือน (Code 2)"}</p>
+                            <div className="alert-time">
+                                เวลา: {new Date().toLocaleTimeString()}
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             <style jsx>{`
                 /* ... existing styles ... */
@@ -1208,51 +1495,13 @@ function MapContent() {
                     color: #aaa;
                 }
             `}</style>
-        </div>
+        </div >
     );
 
-    // Sound Alert Effect (Code 3)
-    useEffect(() => {
-        let audioCtx;
-        let oscillator;
-        let gainNode;
-        let interval;
 
-        if (carStatus === "3") {
-            try {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                oscillator = audioCtx.createOscillator();
-                gainNode = audioCtx.createGain();
 
-                oscillator.type = 'sawtooth';
-                oscillator.frequency.value = 800; // Start freq
-                oscillator.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
 
-                oscillator.start();
 
-                // Siren effect: Modulate frequency
-                let up = true;
-                interval = setInterval(() => {
-                    if (up) oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime);
-                    else oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
-                    up = !up;
-                }, 600);
-            } catch (e) {
-                console.error("Audio Playback Error:", e);
-            }
-        }
-
-        return () => {
-            if (interval) clearInterval(interval);
-            if (oscillator) {
-                try { oscillator.stop(); } catch (e) { }
-            }
-            if (audioCtx) {
-                try { audioCtx.close(); } catch (e) { }
-            }
-        };
-    }, [carStatus]);
 }
 
 export default function MapPage() {

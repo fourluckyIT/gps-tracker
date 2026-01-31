@@ -5,7 +5,9 @@ import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
 // VPS Configuration
-const API_URL = "http://143.14.200.117/api";
+const API_URL = typeof window !== 'undefined'
+    ? `${window.location.origin}/api`
+    : "http://143.14.200.117/api";
 
 function DeviceHistoryContent() {
     const searchParams = useSearchParams();
@@ -14,6 +16,7 @@ function DeviceHistoryContent() {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
     const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD
+    const [onlyAlerts, setOnlyAlerts] = useState(false); // Monitor Mode Toggle
 
     useEffect(() => {
         if (!deviceId) return;
@@ -92,6 +95,29 @@ function DeviceHistoryContent() {
                         Clear
                     </button>
                 )}
+
+                {/* Monitor Mode Toggle */}
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+                    <label style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                        background: onlyAlerts ? '#ff4444' : '#333',
+                        padding: '8px 12px',
+                        borderRadius: '4px',
+                        color: 'white',
+                        fontWeight: 'bold',
+                        transition: 'background 0.3s'
+                    }}>
+                        <input
+                            type="checkbox"
+                            checked={onlyAlerts}
+                            onChange={(e) => setOnlyAlerts(e.target.checked)}
+                            style={{ marginRight: '8px', width: '18px', height: '18px' }}
+                        />
+                        🚨 Monitor Mode (Show Only Alerts)
+                    </label>
+                </div>
             </div>
 
             <div className="dashboard-card">
@@ -129,10 +155,19 @@ function DeviceHistoryContent() {
                                     }
                                 } catch (e) { }
 
+                                // Filter Logic: If Monitor Mode is ON, skip normal rows
+                                if (onlyAlerts) {
+                                    const isCritical = status === "1" || status === "2" || status.includes("STOLEN") || status.includes("CRASH");
+                                    if (!isCritical) return null;
+                                }
+
                                 return (
                                     <tr key={log.id} style={{
-                                        background: status === "3" ? "rgba(255, 0, 0, 0.2)" :
-                                            status === "2" ? "rgba(255, 165, 0, 0.2)" : "transparent"
+                                        background:
+                                            status === "1" || status.includes("STOLEN") ? "rgba(255, 68, 68, 0.2)" : // Red
+                                                status === "2" || status.includes("CRASH") ? "rgba(255, 170, 0, 0.2)" : // Orange
+                                                    status === "0" ? "rgba(255, 255, 0, 0.1)" : // Yellow (BLE Fail)
+                                                        "transparent"
                                     }}>
                                         <td style={{ color: '#a1a1aa', width: '180px' }}>
                                             {new Date(log.timestamp).toLocaleString()}
@@ -141,12 +176,19 @@ function DeviceHistoryContent() {
                                             {log.lat?.toFixed(6)}, {log.lng?.toFixed(6)}
                                         </td>
                                         <td style={{
-                                            color: status === "3" ? "#ff4444" :
-                                                status === "2" ? "#FFA500" : "#FFE66D",
-                                            fontWeight: (status === "3" || status === "2") ? "bold" : "normal"
+                                            color:
+                                                status === "1" || status.includes("STOLEN") ? "#ff4444" :
+                                                    status === "2" || status.includes("CRASH") ? "#ffaa00" :
+                                                        status === "3" ? "#00ff9d" : "#ccc",
+                                            fontWeight: (status === "1" || status === "2") ? "bold" : "normal"
                                         }}>
-                                            {status === "3" ? "⚠️ CRASH" :
-                                                status === "2" ? "⚡ VIBRATION" : status}
+                                            {
+                                                status === "1" || status.includes("STOLEN") ? "🚨 STOLEN (ขโมย)" :
+                                                    status === "2" || status.includes("CRASH") ? "💥 CRASH (อุบัติเหตุ)" :
+                                                        status === "3" || status.includes("NORMAL") ? "🚗 NORMAL (ปกติ)" :
+                                                            status === "0" ? "⚠️ BLE FAIL" :
+                                                                status
+                                            }
                                         </td>
                                         <td style={{ fontFamily: 'monospace', color: 'var(--secondary)' }}>
                                             {log.raw_data}

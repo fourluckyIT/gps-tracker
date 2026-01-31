@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
 // VPS URL (Socket)
-const SERVER_URL = "http://143.14.200.117";
+const SERVER_URL = typeof window !== 'undefined'
+  ? window.location.origin
+  : "http://143.14.200.117";
 const STORAGE_KEY = "gps_tracker_devices";
 
 export default function Home() {
@@ -11,27 +13,11 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  useEffect(() => setMounted(true), []); // Just for hydration safety
+
   const [logs, setLogs] = useState([]); // Real-time Log Stream
 
-  // Load from localStorage on mount
-  useEffect(() => {
-    setMounted(true);
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        setDevices(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse saved devices:", e);
-      }
-    }
-  }, []);
 
-  // Save to localStorage whenever devices change
-  useEffect(() => {
-    if (mounted && Object.keys(devices).length > 0) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(devices));
-    }
-  }, [devices, mounted]);
 
   useEffect(() => {
     // 1. Connect to Socket
@@ -132,8 +118,8 @@ export default function Home() {
             <tr key={d.device_id} style={{ borderBottom: '1px solid #222' }}>
               <td style={{ padding: '10px' }}>
                 <div style={{ display: 'flex', gap: '10px' }}>
-                  <a href={`/device.html?id=${d.device_id}`} style={{ color: '#4ECDC4', textDecoration: 'none', border: '1px solid #4ECDC4', padding: '2px 6px', borderRadius: '4px' }}>📄 LOG</a>
-                  <a href={`/map.html?id=${d.device_id}`} style={{ color: '#FFE66D', textDecoration: 'none', border: '1px solid #FFE66D', padding: '2px 6px', borderRadius: '4px' }}>🗺️ MAP</a>
+                  <a href={`/device?id=${d.device_id}`} style={{ color: '#4ECDC4', textDecoration: 'none', border: '1px solid #4ECDC4', padding: '2px 6px', borderRadius: '4px' }}>📄 LOG</a>
+                  <a href={`/map?id=${d.device_id}`} style={{ color: '#FFE66D', textDecoration: 'none', border: '1px solid #FFE66D', padding: '2px 6px', borderRadius: '4px' }}>🗺️ MAP</a>
                 </div>
                 <div style={{ marginTop: '5px', fontSize: '0.9rem', color: '#fff' }}>[{d.device_id}]</div>
               </td>

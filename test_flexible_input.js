@@ -1,8 +1,8 @@
 const io = require('socket.io-client');
 const axios = require('axios');
 
-const SOCKET_URL = 'http://localhost:3001';
-const API_URL = 'http://localhost:3001/api/track';
+const SOCKET_URL = 'http://localhost:3000';
+const API_URL = 'http://localhost:3000/api/track';
 
 async function runTests() {
     console.log("🚀 Starting Flexible Input Tests...");
@@ -20,14 +20,16 @@ async function runTests() {
         console.error("❌ HTTP JSON Object: FAILED", e.message);
     }
 
-    // 2. HTTP CSV String
+    // 2. HTTP Legacy Format (The crucial one!)
+    // Format: MAC,TYPE LAT, LNG, TIMESTAMP
     try {
-        await axios.post(API_URL, "TEST_HTTP_CSV,EVENT_X,MOVING,13.002,100.002", {
+        const legacyPayload = "f9:09:72:3e:5a:1e,1 13.75633099, 100.50176512, 1709876543";
+        await axios.post(API_URL, legacyPayload, {
             headers: { 'Content-Type': 'text/plain' }
         });
-        console.log("✅ HTTP CSV String: OK");
+        console.log("✅ HTTP Legacy Format (Alarm): OK");
     } catch (e) {
-        console.error("❌ HTTP CSV String: FAILED", e.message);
+        console.error("❌ HTTP Legacy Format (Alarm): FAILED", e.message);
     }
 
     // 3. HTTP Raw String (Minimal)
@@ -56,9 +58,9 @@ async function runTests() {
         socket.emit('message', jsonMsg);
         console.log("📤 Sent WS JSON String");
 
-        // 4b. WS CSV String
-        socket.emit('message', "TEST_WS_CSV,EVENT,MOVING,13.005,100.005");
-        console.log("📤 Sent WS CSV String");
+        // 4b. WS Legacy Format (Driving Normal)
+        socket.emit('message', "f9:09:72:3e:5a:1e,3 13.888, 100.888, 1709999999");
+        console.log("📤 Sent WS Legacy Format (Normal)");
 
         // 4c. WS Raw String (Valid Lat/Lng logic triggers if 3 parts found)
         socket.emit('message', "TEST_WS_RAW,13.006,100.006");
