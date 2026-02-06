@@ -1,150 +1,207 @@
 "use client";
+
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { io } from "socket.io-client";
+import { MapPin, Clock, AlertTriangle, Car, ChevronRight, X, Wifi, WifiOff } from "lucide-react";
 
-// VPS URL (Socket)
-const SERVER_URL = typeof window !== 'undefined'
-  ? window.location.origin
-  : "http://143.14.200.117";
-const STORAGE_KEY = "gps_tracker_devices";
+const SERVER_URL = typeof window !== 'undefined' ? window.location.origin : "http://localhost:3000";
 
-export default function Home() {
-  const [devices, setDevices] = useState({});
-  const [connected, setConnected] = useState(false);
-  const [mounted, setMounted] = useState(false);
+const STATUS_CONFIG = {
+    'STOLEN': { color: '#EF4444', bg: '#FEE2E2', label: '🚨 ถูกขโมย', priority: 1 },
+    'CRASH': { color: '#F97316', bg: '#FFEDD5', label: '💥 อุบัติเหตุ', priority: 2 },
+    'NORMAL': { color: '#22C55E', bg: '#DCFCE7', label: '✅ ปกติ', priority: 3 },
+    'UNKNOWN': { color: '#6B7280', bg: '#F3F4F6', label: '❓ ไม่ทราบ', priority: 4 },
+};
 
-  useEffect(() => setMounted(true), []); // Just for hydration safety
+export default function Dashboard() {
+    const [devices, setDevices] = useState([]);
+    const [connected, setConnected] = useState(false);
+    const [selectedDevice, setSelectedDevice] = useState(null);
+    const [logs, setLogs] = useState([]);
+    const [logsLoading, setLogsLoading] = useState(false);
 
-  const [logs, setLogs] = useState([]); // Real-time Log Stream
+    // Fetch initial devices
+    useEffect(() => {
+        fetch(`${SERVER_URL}/api/devices`)
+            .then(res => res.json())
+            .then(data => setDevices(data || []))
+            .catch(err => console.error("Fetch error:", err));
+    }, []);
 
+    // WebSocket for real-time updates
+    useEffect(() => {
+        const socket = io(SERVER_URL, { transports: ["websocket"] });
 
+        socket.on("connect", () => setConnected(true));
+        socket.on("disconnect", () => setConnected(false));
 
-  useEffect(() => {
-    // 1. Connect to Socket
-    console.log("Connecting to Socket...");
-    const socket = io(SERVER_URL, {
-      transports: ["websocket"], // Force WebSocket for speed
-      reconnectionAttempts: 5
-    });
+        socket.on("device_update", (data) => {
+            setDevices(prev => {
+                const exists = prev.find(d => d.device_id === data.device_id);
+                if (exists) {
+                    return prev.map(d => d.device_id === data.device_id
+                        ? { ...d, lat: data.lat, lng: data.lng, status: data.status, last_update: data.last_update }
+                        : d
+                    );
+                } else {
+                    return [{ device_id: data.device_id, lat: data.lat, lng: data.lng, status: data.status, last_update: data.last_update }, ...prev];
+                }
+            });
+        });
 
-    socket.on("connect", () => {
-      console.log("Socket Connected!");
-      setConnected(true);
-    });
+        socket.on("clear_data", () => setDevices([]));
 
-    socket.on("disconnect", () => {
-      console.log("Socket Disconnected");
-      setConnected(false);
-    });
+        return () => socket.disconnect();
+    }, []);
 
-    // 2. Listen for Realtime Pushes
-    socket.on("device_update", (data) => {
-      // data = { device_id, lat, lng, status, raw, ... }
+    // Fetch logs when device selected
+    const openLogs = (device) => {
+        setSelectedDevice(device);
+        setLogsLoading(true);
+        fetch(`${SERVER_URL}/api/history/${device.device_id}?limit=50`)
+            .then(res => res.json())
+            .then(data => {
+                setLogs(data || []);
+                setLogsLoading(false);
+            })
+            .catch(err => {
+                console.error("Logs fetch error:", err);
+                setLogsLoading(false);
+            });
+    };
 
-      // A. Update Device State (Last Known)
-      setDevices((prev) => ({
-        ...prev,
-        [data.device_id]: data
-      }));
+    const getStatusConfig = (status) => STATUS_CONFIG[status] || STATUS_CONFIG['UNKNOWN'];
 
-      // B. Append to Log Stream (Newest First)
-      setLogs((prev) => {
-        const newLogs = [data, ...prev];
-        return newLogs.slice(0, 50); // Keep last 50
-      });
-    });
-
-    // 3. Listen for Clear Event
-    socket.on("clear_data", () => {
-      setDevices({});
-      setLogs([]);
-      localStorage.removeItem(STORAGE_KEY);
-    });
-
-    // 4. Initial Fetch (Snapshot)
-    fetch(`${SERVER_URL}/api/devices`)
-      .then(res => res.json())
-      .then(data => {
-        const map = {};
-        data.forEach(d => map[d.device_id] = d);
-        setDevices(prev => ({ ...map, ...prev }));
-      })
-      .catch(err => console.error("Snapshot failed:", err));
-
-    return () => socket.disconnect();
-  }, []);
-
-  const handleClear = async () => {
-    if (!confirm("Are you sure you want to clear ALL data?")) return;
-    await fetch(`${SERVER_URL}/api/clear`, { method: 'POST' });
-  };
-
-  // Sort by time (Newest top)
-  const sortedList = Object.values(devices).sort((a, b) =>
-    new Date(b.last_update) - new Date(a.last_update)
-  );
-
-  return (
-    <main style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>SYSTEM_MONITOR_V2</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          <button onClick={handleClear} style={{ background: '#FF4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-            🗑️ Clear Data
-          </button>
-          <div style={{ color: connected ? '#00ff9d' : '#ff0055', fontWeight: 'bold' }}>
-            ● {connected ? 'ONLINE' : 'DISCONNECTED'}
-          </div>
-        </div>
-      </div>
-
-      {/* SECTION 1: DEVICE STATUS (Unique ID) */}
-      <h2 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#888' }}>Last Known Status (Unique Devices)</h2>
-      <table className="device-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '2rem' }}>
-        <thead>
-          <tr style={{ borderBottom: '1px solid #333', textAlign: 'left' }}>
-            <th style={{ padding: '10px' }}>DEVICE ID</th>
-            <th style={{ padding: '10px' }}>STATUS</th>
-            <th style={{ padding: '10px' }}>LAT / LNG</th>
-            <th style={{ padding: '10px' }}>LAST UPDATE</th>
-            <th style={{ padding: '10px' }}>RAW DATA</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sortedList.length === 0 && (
-            <tr><td colSpan={5} style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No active devices</td></tr>
-          )}
-          {sortedList.map((d) => (
-            <tr key={d.device_id} style={{ borderBottom: '1px solid #222' }}>
-              <td style={{ padding: '10px' }}>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <a href={`/device?id=${d.device_id}`} style={{ color: '#4ECDC4', textDecoration: 'none', border: '1px solid #4ECDC4', padding: '2px 6px', borderRadius: '4px' }}>📄 LOG</a>
-                  <a href={`/map?id=${d.device_id}`} style={{ color: '#FFE66D', textDecoration: 'none', border: '1px solid #FFE66D', padding: '2px 6px', borderRadius: '4px' }}>🗺️ MAP</a>
+    return (
+        <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', fontFamily: 'system-ui, sans-serif' }}>
+            {/* Header */}
+            <header style={{ background: '#111', borderBottom: '1px solid #222', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    🛰️ GPS Tracker Dashboard
+                </h1>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem', color: connected ? '#22C55E' : '#EF4444' }}>
+                    {connected ? <Wifi size={18} /> : <WifiOff size={18} />}
+                    {connected ? "Connected" : "Disconnected"}
                 </div>
-                <div style={{ marginTop: '5px', fontSize: '0.9rem', color: '#fff' }}>[{d.device_id}]</div>
-              </td>
-              <td style={{ padding: '10px', color: d.status === 'WALKING' ? '#00ff9d' : '#white' }}>{d.status || 'Active'}</td>
-              <td style={{ padding: '10px', fontFamily: 'monospace' }}>{d.lat ? `${d.lat.toFixed(6)}, ${d.lng.toFixed(6)}` : '-'}</td>
-              <td style={{ padding: '10px', color: '#888' }}>{new Date(d.last_update).toLocaleTimeString()}</td>
-              <td style={{ padding: '10px', fontSize: '0.8rem', opacity: 0.7 }}>{d.raw || '-'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+            </header>
 
-      {/* SECTION 2: LIVE STREAM (Log) */}
-      <h2 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: '#888', marginTop: '30px' }}>Live Data Feed (Incoming Packet Stream)</h2>
-      <div style={{ background: '#111', borderRadius: '8px', padding: '10px', border: '1px solid #333', maxHeight: '400px', overflowY: 'auto' }}>
-        {logs.length === 0 && <div style={{ color: '#666', padding: '10px', textAlign: 'center' }}>Waiting for data packets...</div>}
-        {logs.map((log, i) => (
-          <div key={i} style={{ display: 'flex', gap: '10px', padding: '8px', borderBottom: '1px solid #222', fontSize: '0.9rem' }}>
-            <div style={{ color: '#666', minWidth: '80px' }}>{new Date(log.last_update).toLocaleTimeString()}</div>
-            <div style={{ color: '#4ECDC4', minWidth: '120px' }}>[{log.device_id}]</div>
-            <div style={{ color: '#fff', flex: 1, fontFamily: 'monospace' }}>{log.raw}</div>
-          </div>
-        ))}
-      </div>
+            {/* Main Content */}
+            <main style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+                {/* Stats */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+                    <StatCard icon="📡" label="อุปกรณ์ทั้งหมด" value={devices.length} color="#3B82F6" />
+                    <StatCard icon="🚨" label="แจ้งเตือน" value={devices.filter(d => d.status === 'STOLEN' || d.status === 'CRASH').length} color="#EF4444" />
+                    <StatCard icon="✅" label="ปกติ" value={devices.filter(d => d.status === 'NORMAL').length} color="#22C55E" />
+                </div>
 
-    </main>
-  );
+                {/* Devices Table */}
+                <div style={{ background: '#111', borderRadius: '12px', overflow: 'hidden', border: '1px solid #222' }}>
+                    <div style={{ padding: '16px 20px', borderBottom: '1px solid #222', fontWeight: 'bold', fontSize: '1rem' }}>
+                        📋 รายการอุปกรณ์
+                    </div>
+
+                    {devices.length === 0 ? (
+                        <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+                            <Car size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+                            <p>ยังไม่มีอุปกรณ์</p>
+                            <p style={{ fontSize: '0.875rem' }}>รอรับข้อมูลจาก ESP32...</p>
+                        </div>
+                    ) : (
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ background: '#1a1a1a', fontSize: '0.75rem', textTransform: 'uppercase', color: '#888' }}>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>MAC Address</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>สถานะ</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>พิกัด</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>อัพเดทล่าสุด</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'center' }}>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {devices.map((device, idx) => {
+                                        const cfg = getStatusConfig(device.status);
+                                        return (
+                                            <tr key={device.device_id} style={{ borderBottom: '1px solid #222', cursor: 'pointer' }} onClick={() => openLogs(device)}>
+                                                <td style={{ padding: '14px 16px', fontFamily: 'monospace', fontSize: '0.9rem' }}>
+                                                    {device.device_id}
+                                                </td>
+                                                <td style={{ padding: '14px 16px' }}>
+                                                    <span style={{ display: 'inline-block', padding: '4px 10px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 'bold', background: cfg.bg, color: cfg.color }}>
+                                                        {cfg.label}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '14px 16px', fontSize: '0.85rem', color: '#aaa' }}>
+                                                    {device.lat?.toFixed(5)}, {device.lng?.toFixed(5)}
+                                                </td>
+                                                <td style={{ padding: '14px 16px', fontSize: '0.85rem', color: '#888' }}>
+                                                    {device.last_update ? new Date(device.last_update).toLocaleString('th-TH') : '-'}
+                                                </td>
+                                                <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                    <Link href={`/map?id=${encodeURIComponent(device.device_id)}`} onClick={(e) => e.stopPropagation()}>
+                                                        <button style={{ background: '#3B82F6', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                            🗺️ Map
+                                                        </button>
+                                                    </Link>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </main>
+
+            {/* Logs Modal */}
+            {selectedDevice && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setSelectedDevice(null)}>
+                    <div style={{ background: '#111', borderRadius: '16px', width: '100%', maxWidth: '600px', maxHeight: '80vh', overflow: 'hidden', border: '1px solid #333' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ padding: '16px 20px', borderBottom: '1px solid #222', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h2 style={{ margin: 0, fontSize: '1rem' }}>📜 Log: {selectedDevice.device_id}</h2>
+                            <button onClick={() => setSelectedDevice(null)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}>
+                                <X size={24} />
+                            </button>
+                        </div>
+                        <div style={{ maxHeight: '60vh', overflow: 'auto', padding: '12px' }}>
+                            {logsLoading ? (
+                                <p style={{ textAlign: 'center', color: '#888', padding: '20px' }}>กำลังโหลด...</p>
+                            ) : logs.length === 0 ? (
+                                <p style={{ textAlign: 'center', color: '#888', padding: '20px' }}>ไม่มีประวัติ</p>
+                            ) : (
+                                logs.map((log, idx) => (
+                                    <div key={log.id || idx} style={{ padding: '10px 12px', background: '#1a1a1a', borderRadius: '8px', marginBottom: '8px', fontSize: '0.85rem' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                            <span style={{ color: getStatusConfig(log.status).color, fontWeight: 'bold' }}>{getStatusConfig(log.status).label}</span>
+                                            <span style={{ color: '#666' }}>{new Date(log.timestamp).toLocaleString('th-TH')}</span>
+                                        </div>
+                                        <div style={{ color: '#aaa' }}>📍 {log.lat?.toFixed(5)}, {log.lng?.toFixed(5)}</div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                        <div style={{ padding: '12px 20px', borderTop: '1px solid #222' }}>
+                            <Link href={`/map?id=${encodeURIComponent(selectedDevice.device_id)}`}>
+                                <button style={{ width: '100%', background: '#4ECDC4', color: 'black', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>
+                                    🗺️ เปิดแผนที่
+                                </button>
+                            </Link>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function StatCard({ icon, label, value, color }) {
+    return (
+        <div style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '1.5rem', marginBottom: '4px' }}>{icon}</div>
+            <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color }}>{value}</div>
+            <div style={{ fontSize: '0.75rem', color: '#888' }}>{label}</div>
+        </div>
+    );
 }
