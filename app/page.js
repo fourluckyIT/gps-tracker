@@ -20,6 +20,8 @@ export default function Dashboard() {
     const [selectedDevice, setSelectedDevice] = useState(null);
     const [logs, setLogs] = useState([]);
     const [logsLoading, setLogsLoading] = useState(false);
+    const [credentials, setCredentials] = useState({});
+    const [generatingCode, setGeneratingCode] = useState(null);
 
     // Fetch initial devices
     useEffect(() => {
@@ -54,6 +56,40 @@ export default function Dashboard() {
 
         return () => socket.disconnect();
     }, []);
+
+    // Fetch credentials on load
+    useEffect(() => {
+        fetch(`${SERVER_URL}/api/admin/credentials`)
+            .then(res => res.json())
+            .then(data => {
+                const map = {};
+                (data || []).forEach(c => { map[c.device_id] = c; });
+                setCredentials(map);
+            })
+            .catch(console.error);
+    }, []);
+
+    // Generate credential for device
+    const generateCredential = async (deviceId) => {
+        setGeneratingCode(deviceId);
+        try {
+            const res = await fetch(`${SERVER_URL}/api/admin/credential`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ device_id: deviceId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setCredentials(prev => ({
+                    ...prev,
+                    [deviceId]: { code: data.code, is_registered: 0 }
+                }));
+            }
+        } catch (err) {
+            console.error(err);
+        }
+        setGeneratingCode(null);
+    };
 
     // Fetch logs when device selected
     const openLogs = (device) => {
@@ -121,12 +157,14 @@ export default function Dashboard() {
                                         <th style={{ padding: '12px 16px', textAlign: 'left' }}>สถานะ</th>
                                         <th style={{ padding: '12px 16px', textAlign: 'left' }}>พิกัด</th>
                                         <th style={{ padding: '12px 16px', textAlign: 'left' }}>อัพเดทล่าสุด</th>
+                                        <th style={{ padding: '12px 16px', textAlign: 'center' }}>Credential</th>
                                         <th style={{ padding: '12px 16px', textAlign: 'center' }}>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {devices.map((device, idx) => {
                                         const cfg = getStatusConfig(device.status);
+                                        const cred = credentials[device.device_id];
                                         return (
                                             <tr key={device.device_id} style={{ borderBottom: '1px solid #222', cursor: 'pointer' }} onClick={() => openLogs(device)}>
                                                 <td style={{ padding: '14px 16px', fontFamily: 'monospace', fontSize: '0.9rem' }}>
@@ -142,6 +180,38 @@ export default function Dashboard() {
                                                 </td>
                                                 <td style={{ padding: '14px 16px', fontSize: '0.85rem', color: '#888' }}>
                                                     {device.last_update ? new Date(device.last_update).toLocaleString('th-TH') : '-'}
+                                                </td>
+                                                <td style={{ padding: '14px 16px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                                                    {cred ? (
+                                                        <span style={{
+                                                            fontFamily: 'monospace',
+                                                            fontSize: '0.9rem',
+                                                            fontWeight: 'bold',
+                                                            color: cred.is_registered ? '#22C55E' : '#FBBF24',
+                                                            background: cred.is_registered ? '#052e16' : '#422006',
+                                                            padding: '4px 10px',
+                                                            borderRadius: '6px',
+                                                        }}>
+                                                            {cred.code} {cred.is_registered ? '✅' : '⏳'}
+                                                        </span>
+                                                    ) : (
+                                                        <button
+                                                            onClick={() => generateCredential(device.device_id)}
+                                                            disabled={generatingCode === device.device_id}
+                                                            style={{
+                                                                background: '#8B5CF6',
+                                                                color: 'white',
+                                                                border: 'none',
+                                                                padding: '6px 12px',
+                                                                borderRadius: '6px',
+                                                                cursor: 'pointer',
+                                                                fontSize: '0.75rem',
+                                                                opacity: generatingCode === device.device_id ? 0.5 : 1,
+                                                            }}
+                                                        >
+                                                            {generatingCode === device.device_id ? '...' : '🔑 สร้างรหัส'}
+                                                        </button>
+                                                    )}
                                                 </td>
                                                 <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                                     <Link href={`/map?id=${encodeURIComponent(device.device_id)}`} onClick={(e) => e.stopPropagation()}>

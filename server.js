@@ -44,6 +44,36 @@ db.serialize(() => {
         raw_data TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+
+    // Credentials: Admin creates when device first appears
+    db.run(`CREATE TABLE IF NOT EXISTS credentials (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE,
+        device_id TEXT,
+        is_registered INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // Registrations: User vehicle info
+    db.run(`CREATE TABLE IF NOT EXISTS registrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_token TEXT UNIQUE,
+        devices TEXT DEFAULT '[]',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // Vehicle info linked to credentials
+    db.run(`CREATE TABLE IF NOT EXISTS vehicles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        credential_code TEXT,
+        device_id TEXT,
+        plate_number TEXT,
+        driver_name TEXT,
+        emergency_phone TEXT,
+        vehicle_name TEXT,
+        user_token TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
 });
 
 // ========== DATA PARSER ==========
@@ -180,6 +210,145 @@ nextApp.prepare().then(() => {
             if (err) return res.status(500).json({ error: err.message });
             io.emit('device_update', { device_id: req.params.id, sos_update: true });
             res.json({ success: true, numbers: JSON.parse(json) });
+        });
+    });
+
+    // ========== CREDENTIAL SYSTEM ==========
+
+    // 🔑 Generate credential code (Admin)
+    app.post('/api/admin/credential', (req, res) => {
+        const { device_id } = req.body;
+        if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+        // Generate 6-character code
+        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+        db.run(`INSERT INTO credentials (code, device_id) VALUES (?, ?)`,
+            [code, device_id], function (err) {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({ success: true, code, device_id });
+            });
+    });
+
+    // 🔑 Get all credentials (Admin)
+    app.get('/api/admin/credentials', (req, res) => {
+        db.all(`SELECT c.*, v.plate_number, v.driver_name 
+                FROM credentials c 
+                LEFT JOIN vehicles v ON c.code = v.credential_code
+                ORDER BY c.created_at DESC`, [], (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(rows || []);
+        });
+    });
+
+    // 🔐 Verify credential code (User)
+    app.post('/api/user/verify', (req, res) => {
+        const { code } = req.body;
+        if (!code) return res.status(400).json({ error: "code required" });
+
+        db.get("SELECT * FROM credentials WHERE code = ?", [code.toUpperCase()], (err, row) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (!row) return res.status(404).json({ error: "Invalid code", valid: false });
+
+            // Check if already registered
+            db.get("SELECT * FROM vehicles WHERE credential_code = ?", [code.toUpperCase()], (err2, vehicle) => {
+                res.json({
+                    valid: true,
+                    device_id: row.device_id,
+                    is_registered: row.is_registered === 1,
+                    vehicle: vehicle || null
+                });
+            });
+        });
+    });
+
+    // 📝 Register vehicle (User)
+    app.post('/api/user/register', (req, res) => {
+        const { code, plate_number, driver_name, emergency_phone, user_token } = req.body;
+        if (!code || !plate_number || !driver_name) {
+            return res.status(400).json({ error: "Missing required fields" });
+        }
+
+        // Verify credential exists
+        db.get("SELECT * FROM credentials WHERE code = ?", [code.toUpperCase()], (err, cred) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (!cred) return res.status(404).json({ error: "Invalid credential" });
+
+            const vehicleName = `${plate_number} - ${driver_name}`;
+            const token = user_token || Math.random().toString(36).substring(2, 15);
+
+            // Insert vehicle
+            db.run(`INSERT INTO vehicles (credential_code, device_id, plate_number, driver_name, emergency_phone, vehicle_name, user_token)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [code.toUpperCase(), cred.device_id, plate_number, driver_name, emergency_phone || '', vehicleName, token],
+                function (err) {
+                    if (err) return res.status(500).json({ error: err.message });
+
+                    // Mark credential as registered
+                    db.run("UPDATE credentials SET is_registered = 1 WHERE code = ?", [code.toUpperCase()]);
+
+                    res.json({
+                        success: true,
+                        user_token: token,
+                        vehicle: {
+                            device_id: cred.device_id,
+                            plate_number,
+                            driver_name,
+                            vehicle_name: vehicleName
+                        }
+                    });
+                });
+        });
+    });
+
+    // 🚗 Get user's vehicles (User)
+    app.get('/api/user/vehicles', (req, res) => {
+        const token = req.query.token || req.headers['x-user-token'];
+        if (!token) return res.status(400).json({ error: "Token required" });
+
+        db.all(`SELECT v.*, d.lat, d.lng, d.status, d.last_update
+                FROM vehicles v
+                LEFT JOIN devices d ON v.device_id = d.device_id
+                WHERE v.user_token = ?
+                ORDER BY v.created_at DESC`, [token], (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(rows || []);
+        });
+    });
+
+    // ➕ Add vehicle to user account
+    app.post('/api/user/add-vehicle', (req, res) => {
+        const { code, plate_number, driver_name, emergency_phone, user_token } = req.body;
+        if (!code || !plate_number || !user_token) {
+            return res.status(400).json({ error: "Missing required fields" });
+        }
+
+        // Use existing register logic but with existing token
+        db.get("SELECT * FROM credentials WHERE code = ?", [code.toUpperCase()], (err, cred) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (!cred) return res.status(404).json({ error: "Invalid credential" });
+            if (cred.is_registered) return res.status(400).json({ error: "Credential already used" });
+
+            const vehicleName = `${plate_number} - ${driver_name || 'รถใหม่'}`;
+
+            db.run(`INSERT INTO vehicles (credential_code, device_id, plate_number, driver_name, emergency_phone, vehicle_name, user_token)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [code.toUpperCase(), cred.device_id, plate_number, driver_name || '', emergency_phone || '', vehicleName, user_token],
+                function (err) {
+                    if (err) return res.status(500).json({ error: err.message });
+
+                    db.run("UPDATE credentials SET is_registered = 1 WHERE code = ?", [code.toUpperCase()]);
+
+                    res.json({
+                        success: true,
+                        vehicle: {
+                            device_id: cred.device_id,
+                            plate_number,
+                            driver_name,
+                            vehicle_name: vehicleName
+                        }
+                    });
+                });
         });
     });
 
