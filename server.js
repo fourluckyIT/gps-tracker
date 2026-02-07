@@ -159,9 +159,7 @@ function handleData(data) {
     });
 
     // 🛡️ CHECK GEOFENCES
-    console.log(`[DEBUG] Calling checkOrderedFences for ${deviceId}`);
     checkGeofences(deviceId, lat, lng);
-    console.log(`[DEBUG] Called checkOrderedFences for ${deviceId}`);
 
     console.log(`📡 [${deviceId}] Status: ${status}, Lat: ${lat}, Lng: ${lng}`);
     return { success: true };
@@ -169,7 +167,6 @@ function handleData(data) {
 
 // ========== GEOFENCE LOGIC ==========
 function checkGeofences(deviceId, lat, lng) {
-    console.log(`[DEBUG] Inside checkGeofences: ${deviceId} @ ${lat},${lng}`);
     if (!lat || !lng) return;
 
     db.all("SELECT * FROM geofences WHERE device_id = ?", [deviceId], (err, fences) => {
