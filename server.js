@@ -177,6 +177,10 @@ function checkGeofences(deviceId, lat, lng) {
             const isInside = distance <= fence.radius;
             const wasInside = fence.is_inside === 1;
 
+            if (deviceId.includes('MOCK')) {
+                console.log(`🔍 [Geo] ${fence.name}: ${distance.toFixed(1)}m / ${fence.radius}m | In: ${isInside} (Was: ${wasInside})`);
+            }
+
             // ENTER Event
             if (isInside && !wasInside) {
                 console.log(`🛡️ [ENTER] ${deviceId} entered ${fence.name}`);
@@ -473,17 +477,24 @@ nextApp.prepare().then(() => {
             if (err) return res.status(500).json({ error: err.message });
 
             if (rows.length >= 3) {
-                // Check if updating existing by name or just reject
-                // user should delete first, or we can use ID to update. 
-                // For simplicity, strict limit 3.
                 return res.status(400).json({ error: "Maximum 3 geofences allowed. Please delete one first." });
             }
 
-            db.run("INSERT INTO geofences (device_id, name, lat, lng, radius) VALUES (?, ?, ?, ?, ?)",
-                [device_id, name, lat, lng, radius], function (err) {
-                    if (err) return res.status(500).json({ error: err.message });
-                    res.json({ success: true, id: this.lastID });
-                });
+            // Calculate initial status
+            let initialIsInside = false;
+            db.get("SELECT lat, lng FROM devices WHERE device_id = ?", [device_id], (err, dev) => {
+                if (dev && dev.lat && dev.lng) {
+                    const dist = getDistanceFromLatLonInKm(lat, lng, dev.lat, dev.lng) * 1000;
+                    if (dist <= radius) initialIsInside = true;
+                }
+
+                db.run("INSERT INTO geofences (device_id, name, lat, lng, radius, is_inside) VALUES (?, ?, ?, ?, ?, ?)",
+                    [device_id, name, lat, lng, radius, initialIsInside ? 1 : 0], function (err) {
+                        if (err) return res.status(500).json({ error: err.message });
+                        console.log(`🛡️ Added Fence: ${name} for ${device_id} (Initial Inside: ${initialIsInside})`);
+                        res.json({ success: true, id: this.lastID });
+                    });
+            });
         });
     });
 
