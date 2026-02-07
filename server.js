@@ -167,10 +167,15 @@ function handleData(data) {
 
 // ========== GEOFENCE LOGIC ==========
 function checkGeofences(deviceId, lat, lng) {
+    // console.log(`Checking fences for ${deviceId} at ${lat},${lng}`);
     if (!lat || !lng) return;
 
     db.all("SELECT * FROM geofences WHERE device_id = ?", [deviceId], (err, fences) => {
-        if (err || !fences) return;
+        if (err) console.error("Geo DB Error:", err);
+        if (!fences || fences.length === 0) {
+            // console.log(`No fences for ${deviceId}`);
+            return;
+        }
 
         fences.forEach(fence => {
             const distance = getDistanceFromLatLonInKm(lat, lng, fence.lat, fence.lng) * 1000; // Meters
