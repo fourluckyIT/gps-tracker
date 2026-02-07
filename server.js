@@ -74,6 +74,18 @@ db.serialize(() => {
         user_token TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+
+    // 🛡️ Geofences (Parking Spots) - Max 3 per device
+    db.run(`CREATE TABLE IF NOT EXISTS geofences (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_id TEXT,
+        name TEXT,
+        lat REAL,
+        lng REAL,
+        radius REAL,
+        is_inside INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
 });
 
 // ========== DATA PARSER ==========
@@ -146,8 +158,64 @@ function handleData(data) {
         last_update: new Date().toISOString()
     });
 
+    // 🛡️ CHECK GEOFENCES
+    checkGeofences(deviceId, lat, lng);
+
     console.log(`📡 [${deviceId}] Status: ${status}, Lat: ${lat}, Lng: ${lng}`);
     return { success: true };
+}
+
+// ========== GEOFENCE LOGIC ==========
+function checkGeofences(deviceId, lat, lng) {
+    if (!lat || !lng) return;
+
+    db.all("SELECT * FROM geofences WHERE device_id = ?", [deviceId], (err, fences) => {
+        if (err || !fences) return;
+
+        fences.forEach(fence => {
+            const distance = getDistanceFromLatLonInKm(lat, lng, fence.lat, fence.lng) * 1000; // Meters
+            const isInside = distance <= fence.radius;
+            const wasInside = fence.is_inside === 1;
+
+            // ENTER Event
+            if (isInside && !wasInside) {
+                console.log(`🛡️ [ENTER] ${deviceId} entered ${fence.name}`);
+                db.run("UPDATE geofences SET is_inside = 1 WHERE id = ?", [fence.id]);
+                io.emit('geofence_alert', { device_id: deviceId, type: 'ENTER', name: fence.name, time: new Date() });
+
+                // Log event
+                db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data) VALUES (?, ?, ?, ?, ?)`,
+                    [deviceId, lat, lng, 'GEOFENCE_ENTER', `Entered ${fence.name}`]);
+            }
+
+            // EXIT Event
+            if (!isInside && wasInside) {
+                console.log(`🛡️ [EXIT] ${deviceId} exited ${fence.name}`);
+                db.run("UPDATE geofences SET is_inside = 0 WHERE id = ?", [fence.id]);
+                io.emit('geofence_alert', { device_id: deviceId, type: 'EXIT', name: fence.name, time: new Date() });
+
+                // Log event
+                db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data) VALUES (?, ?, ?, ?, ?)`,
+                    [deviceId, lat, lng, 'GEOFENCE_EXIT', `Exited ${fence.name}`]);
+            }
+        });
+    });
+}
+
+function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+    var R = 6371; // Km
+    var dLat = deg2rad(lat2 - lat1);
+    var dLon = deg2rad(lon2 - lon1);
+    var a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+function deg2rad(deg) {
+    return deg * (Math.PI / 180);
 }
 
 // ========== START SERVER ==========
@@ -377,10 +445,54 @@ nextApp.prepare().then(() => {
         db.serialize(() => {
             db.run("DELETE FROM logs");
             db.run("DELETE FROM devices");
+            // Keep users/vehicles/geofences usually, but if full reset needed:
+            // db.run("DELETE FROM vehicles");
+            // db.run("DELETE FROM geofences");
         });
         io.emit('clear_data');
         console.log("🗑️ Database cleared");
         res.json({ success: true });
+    });
+
+    // ========== GEOFENCE API ==========
+
+    // 🛡️ Get Geofences
+    app.get('/api/geofence/:device_id', (req, res) => {
+        db.all("SELECT * FROM geofences WHERE device_id = ?", [req.params.device_id], (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(rows || []);
+        });
+    });
+
+    // 🛡️ Add/Update Geofence (Max 3)
+    app.post('/api/geofence', (req, res) => {
+        const { device_id, name, lat, lng, radius } = req.body;
+        if (!device_id || !name || !lat || !lng || !radius) return res.status(400).json({ error: "Missing fields" });
+
+        db.all("SELECT * FROM geofences WHERE device_id = ?", [device_id], (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+
+            if (rows.length >= 3) {
+                // Check if updating existing by name or just reject
+                // user should delete first, or we can use ID to update. 
+                // For simplicity, strict limit 3.
+                return res.status(400).json({ error: "Maximum 3 geofences allowed. Please delete one first." });
+            }
+
+            db.run("INSERT INTO geofences (device_id, name, lat, lng, radius) VALUES (?, ?, ?, ?, ?)",
+                [device_id, name, lat, lng, radius], function (err) {
+                    if (err) return res.status(500).json({ error: err.message });
+                    res.json({ success: true, id: this.lastID });
+                });
+        });
+    });
+
+    // 🛡️ Delete Geofence
+    app.delete('/api/geofence/:id', (req, res) => {
+        db.run("DELETE FROM geofences WHERE id = ?", [req.params.id], function (err) {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ success: true });
+        });
     });
 
     // 🔌 WebSocket
