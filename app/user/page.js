@@ -48,6 +48,24 @@ export default function UserApp() {
 
     // Check local storage for existing token
     useEffect(() => {
+        // Load Leaflet CSS
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        document.head.appendChild(link);
+
+        // Fix Leaflet marker icons
+        if (typeof window !== 'undefined') {
+            import('leaflet').then((L) => {
+                delete L.Icon.Default.prototype._getIconUrl;
+                L.Icon.Default.mergeOptions({
+                    iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+                    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+                    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+                });
+            });
+        }
+
         const token = localStorage.getItem('gps_user_token');
         if (token) {
             setUserToken(token);

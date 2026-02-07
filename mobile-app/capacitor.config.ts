@@ -5,8 +5,8 @@ const config: CapacitorConfig = {
     appName: 'GPS Tracker',
     webDir: 'www',
     server: {
-        // Point directly to your VPS - the app will load this URL
-        url: 'http://143.14.200.117',
+        // Point directly to your VPS User App
+        url: 'http://143.14.200.117/user',
         cleartext: true,  // Allow HTTP (not HTTPS)
     },
     android: {
