@@ -1,84 +1,52 @@
-:root {
-  --bg: #0a0a0a;
-  --fg: #ededed;
-  --accent: #00ff9d;
-  --border: #333;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-* {
-  box-sizing: border-box;
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
 }
 
 body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: 'Courier New', Courier, monospace;
-  margin: 0;
-  padding: 0;
-  /* Safe area for notch, Dynamic Island, status bar */
+  color: rgb(var(--foreground-rgb));
+  background: white;
+  font-family: 'Inter', sans-serif;
+  /* Modern Font */
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
 }
 
-/* Pages with padding (not map) */
-main.container,
-main:not(.map-container) {
-  padding: 20px;
+/* Custom Safe Area Utilities */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
-h1 {
-  margin-bottom: 20px;
-  border-bottom: 2px solid var(--accent);
-  display: inline-block;
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
 }
 
-/* The "Stupid Table" - High Contrast, Readable */
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 10px;
-  border: 1px solid var(--border);
+/* Animation Utils */
+.slide-up {
+  animation: slideUp 0.3s ease-out;
 }
 
-th,
-td {
-  text-align: left;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
 }
 
-th {
-  background: #151515;
-  color: var(--accent);
-  text-transform: uppercase;
+/* Scroll Hide */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
-tr:hover {
-  background: #1a1a1a;
-}
-
-a {
-  color: #4dabf7;
-  text-decoration: none;
-  font-weight: bold;
-}
-
-a:hover {
-  text-decoration: underline;
-  color: #74c0fc;
-}
-
-.status-active {
-  color: #00ff9d;
-}
-
-.status-offline {
-  color: #ff0055;
-}
-
-.loading {
-  color: #888;
-  font-style: italic;
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
