@@ -3,7 +3,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { GoogleMap, useJsApiLoader, Marker } from "@react-google-maps/api";
 import { Toaster, toast } from "react-hot-toast";
 import { io } from "socket.io-client";
-import { Menu, X, Plus, LogOut, Car, Navigation, ChevronDown, ChevronUp } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+    Menu, X, Plus, LogOut, Car, Navigation, Phone,
+    User, ChevronRight, MapPin, Clock
+} from "lucide-react";
 
 // Server URL
 const SERVER_URL = typeof window !== 'undefined' ? window.location.origin : '';
@@ -12,10 +16,10 @@ const GOOGLE_MAPS_API_KEY = "AIzaSyACWF7KC20kJzTuxl-AicAuANdZaP7U74Q";
 const defaultCenter = { lat: 13.7563, lng: 100.5018 };
 
 const STATUS_CONFIG = {
-    'NORMAL': { color: '#000', label: 'รถสถานะปกติ', icon: '✅' },
-    'STOLEN': { color: '#EF4444', label: 'รถถูกขโมย!', icon: '🚨' },
-    'CRASH': { color: '#F59E0B', label: 'เกิดอุบัติเหตุ!', icon: '⚠️' },
-    'UNKNOWN': { color: '#6B7280', label: 'ไม่ทราบสถานะ', icon: '❓' },
+    'NORMAL': { color: '#10B981', label: 'ปกติ', bg: '#DCFCE7' },
+    'STOLEN': { color: '#EF4444', label: 'ถูกขโมย!', bg: '#FEE2E2' },
+    'CRASH': { color: '#F59E0B', label: 'อุบัติเหตุ', bg: '#FEF3C7' },
+    'UNKNOWN': { color: '#6B7280', label: 'ไม่ทราบ', bg: '#F3F4F6' },
 };
 
 export default function UserApp() {
@@ -28,7 +32,7 @@ export default function UserApp() {
 
     // Google Maps
     const [map, setMap] = useState(null);
-    const { isLoaded, loadError } = useJsApiLoader({
+    const { isLoaded } = useJsApiLoader({
         googleMapsApiKey: GOOGLE_MAPS_API_KEY,
         language: "th",
     });
@@ -40,17 +44,17 @@ export default function UserApp() {
     const [emergencyPhone, setEmergencyPhone] = useState('');
     const [error, setError] = useState('');
 
-    // Timer for duration update
-    const [now, setNow] = useState(new Date());
-
     // Socket
     const socketRef = useRef(null);
 
+    // Time update
+    const [now, setNow] = useState(new Date());
     useEffect(() => {
-        const timer = setInterval(() => setNow(new Date()), 60000); // Update every minute
-        return () => clearInterval(timer);
+        const t = setInterval(() => setNow(new Date()), 60000);
+        return () => clearInterval(t);
     }, []);
 
+    // Initial Load
     useEffect(() => {
         const token = localStorage.getItem('gps_user_token');
         if (token) {
@@ -61,26 +65,16 @@ export default function UserApp() {
         }
     }, []);
 
+    // Socket & Logic
     useEffect(() => {
         if (!userToken || step !== 'app') return;
-
-        socketRef.current = io(SERVER_URL, {
-            transports: ["websocket"],
-            query: { token: userToken }
-        });
-
+        socketRef.current = io(SERVER_URL, { transports: ["websocket"], query: { token: userToken } });
         socketRef.current.on("device_update", (data) => {
             setVehicles(prev => {
                 const index = prev.findIndex(v => v.device_id === data.device_id);
                 if (index !== -1) {
                     const newVehicles = [...prev];
-                    newVehicles[index] = {
-                        ...newVehicles[index],
-                        lat: data.lat,
-                        lng: data.lng,
-                        status: data.status,
-                        last_update: data.last_update
-                    };
+                    newVehicles[index] = { ...newVehicles[index], lat: data.lat, lng: data.lng, status: data.status, last_update: data.last_update };
                     if (selectedVehicle?.device_id === data.device_id) {
                         setSelectedVehicle(curr => ({ ...curr, ...newVehicles[index] }));
                     }
@@ -89,10 +83,7 @@ export default function UserApp() {
                 return prev;
             });
         });
-
-        return () => {
-            if (socketRef.current) socketRef.current.disconnect();
-        };
+        return () => { if (socketRef.current) socketRef.current.disconnect(); };
     }, [userToken, step]);
 
 
@@ -107,137 +98,90 @@ export default function UserApp() {
             } else {
                 setStep('login');
             }
-        } catch (err) {
-            console.error(err);
-            setStep('login');
-        }
+        } catch (err) { setStep('login'); }
     };
 
-    const handleVerify = async () => {
+    const handleVerify = async () => { /* ...Auth Logic... */
         setError('');
         try {
-            const res = await fetch(`${SERVER_URL}/api/user/verify`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code: credCode }),
-            });
+            const res = await fetch(`${SERVER_URL}/api/user/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: credCode }) });
             const data = await res.json();
             if (!data.valid) { setError('❌ รหัสไม่ถูกต้อง'); return; }
-
             if (data.is_registered && data.vehicle) {
                 localStorage.setItem('gps_user_token', data.vehicle.user_token);
                 setUserToken(data.vehicle.user_token);
                 loadVehicles(data.vehicle.user_token);
-            } else {
-                setStep('register');
-            }
-        } catch (err) { setError('เกิดข้อผิดพลาด'); }
+            } else { setStep('register'); }
+        } catch (err) { setError('Error'); }
     };
 
-    const handleRegister = async () => {
-        if (!plateNumber || !driverName) { setError('❌ กรุณากรอกข้อมูลให้ครบ'); return; }
+    const handleRegister = async () => { /* ...Register Logic... */
+        if (!plateNumber || !driverName) { setError('❌ กรอกให้ครบ'); return; }
         try {
-            const res = await fetch(`${SERVER_URL}/api/user/register`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    code: credCode,
-                    plate_number: plateNumber,
-                    driver_name: driverName,
-                    emergency_phone: emergencyPhone,
-                    user_token: userToken,
-                }),
-            });
+            const res = await fetch(`${SERVER_URL}/api/user/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: credCode, plate_number: plateNumber, driver_name: driverName, emergency_phone: emergencyPhone, user_token: userToken }) });
             const data = await res.json();
             if (data.success) {
                 localStorage.setItem('gps_user_token', data.user_token);
                 setUserToken(data.user_token);
                 loadVehicles(data.user_token);
             } else { setError(data.error); }
-        } catch (err) { setError('เกิดข้อผิดพลาด'); }
+        } catch (err) { setError('Error'); }
     };
 
     const openAddVehicle = () => {
-        setMenuOpen(false);
-        setAddingVehicle(true);
-        setCredCode('');
-        setPlateNumber('');
-        if (vehicles.length > 0) {
-            setDriverName(vehicles[0].driver_name || '');
-            setEmergencyPhone(vehicles[0].emergency_phone || '');
-        }
+        setMenuOpen(false); setAddingVehicle(true); setCredCode(''); setPlateNumber('');
+        if (vehicles.length > 0) { setDriverName(vehicles[0].driver_name || ''); setEmergencyPhone(vehicles[0].emergency_phone || ''); }
     };
 
-    const handleAddVehicle = async () => {
+    const handleAddVehicle = async () => { /* ...Add Vehicle Logic... */
         try {
-            const res = await fetch(`${SERVER_URL}/api/user/add-vehicle`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    code: credCode,
-                    plate_number: plateNumber,
-                    driver_name: driverName,
-                    emergency_phone: emergencyPhone,
-                    user_token: userToken,
-                }),
-            });
+            const res = await fetch(`${SERVER_URL}/api/user/add-vehicle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: credCode, plate_number: plateNumber, driver_name: driverName, emergency_phone: emergencyPhone, user_token: userToken }) });
             const data = await res.json();
-            if (data.success) {
-                setAddingVehicle(false);
-                loadVehicles(userToken);
-                toast.success('🎉 เพิ่มรถเรียบร้อย!');
-            } else { setError(data.error); }
-        } catch (err) { setError('เกิดข้อผิดพลาด'); }
+            if (data.success) { setAddingVehicle(false); loadVehicles(userToken); toast.success('Success'); } else { setError(data.error); }
+        } catch (err) { setError('Error'); }
     };
 
     const onLoad = useCallback((map) => { setMap(map); }, []);
     const onUnmount = useCallback(() => { setMap(null); }, []);
 
-    // Format Helper
-    const getUpdateInfo = (lastUpdate) => {
-        if (!lastUpdate) return { time: '-', duration: '-' };
-        const date = new Date(lastUpdate);
-        const timeStr = date.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) + ' น.';
-
-        const diffMs = now - date;
-        const diffMins = Math.floor(diffMs / 60000);
-        const diffHours = Math.floor(diffMins / 60);
-
-        let durationStr = "";
-        if (diffMins < 60) durationStr = `${diffMins} นาที`;
-        else durationStr = `${diffHours} ชม. ${diffMins % 60} นาที`;
-
-        return { time: timeStr, duration: durationStr };
+    // --- Helper: Calculate Time ---
+    const getDuration = (lastUpdate) => {
+        if (!lastUpdate) return "- นาที";
+        const diff = Math.floor((now - new Date(lastUpdate)) / 60000);
+        if (diff < 60) return `${diff} นาที`;
+        return `${Math.floor(diff / 60)} ชม.`;
     };
 
-    if (step === 'loading') {
-        return <div className="loading-screen">กำลังโหลด...</div>;
-    }
+    // --- Helper: Select Vehicle ---
+    const selectVehicleByIndex = (index) => {
+        if (index < 0 || index >= vehicles.length) return;
+        const v = vehicles[index];
+        setSelectedVehicle(v);
+        map?.panTo({ lat: v.lat, lng: v.lng });
+    };
 
-    // --- RENDERING ---
+    if (step === 'loading') return <div className="loading">Loading...</div>;
 
-    // Auth Screens (Clean Light Theme for Auth)
+    // Login/Register UI (Clean)
     if (step === 'login' || step === 'register') {
         return (
             <div style={styles.authContainer}>
                 <div style={styles.authBox}>
                     <div style={styles.logo}>🛰️</div>
-                    <h1 style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 10 }}>GPS Tracker</h1>
+                    <h1 style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 20 }}>GPS Tracker</h1>
                     {step === 'login' ? (
                         <>
-                            <p style={{ color: '#666', marginBottom: 20 }}>กรอกรหัสอุปกรณ์เพื่อติดตาม</p>
-                            <input type="text" placeholder="รหัสอุปกรณ์ (เช่น ABC1234)" value={credCode} onChange={e => setCredCode(e.target.value.toUpperCase())} style={styles.input} maxLength={6} />
+                            <input type="text" placeholder="รหัสอุปกรณ์ (ABC1234)" value={credCode} onChange={e => setCredCode(e.target.value.toUpperCase())} style={styles.input} maxLength={6} />
                             {error && <p style={styles.error}>{error}</p>}
                             <button onClick={handleVerify} style={styles.primaryBtn}>เข้าสู่ระบบ</button>
                         </>
                     ) : (
                         <>
-                            <p style={{ color: '#666', marginBottom: 20 }}>ลงทะเบียนรถใหม่</p>
                             <input type="text" placeholder="ทะเบียนรถ" value={plateNumber} onChange={e => setPlateNumber(e.target.value)} style={styles.input} />
                             <input type="text" placeholder="ชื่อผู้ขับ" value={driverName} onChange={e => setDriverName(e.target.value)} style={styles.input} />
                             <input type="tel" placeholder="เบอร์ฉุกเฉิน" value={emergencyPhone} onChange={e => setEmergencyPhone(e.target.value)} style={styles.input} />
                             {error && <p style={styles.error}>{error}</p>}
-                            <button onClick={handleRegister} style={styles.primaryBtn}>ยืนยัน</button>
+                            <button onClick={handleRegister} style={styles.primaryBtn}>ลงทะเบียน</button>
                         </>
                     )}
                 </div>
@@ -245,120 +189,157 @@ export default function UserApp() {
         );
     }
 
-    // Main App
-    const updateInfo = selectedVehicle ? getUpdateInfo(selectedVehicle.last_update) : { time: '-', duration: '-' };
-
     return (
         <div style={styles.appContainer}>
             <Toaster position="top-center" />
 
-            {/* Map */}
-            <div style={styles.mapContainer}>
-                {isLoaded ? (
+            {/* HEADER Floating */}
+            <div style={styles.headerFloating}>
+                <button onClick={() => setMenuOpen(true)} style={styles.menuIconBtn}>
+                    <Menu size={24} color="#1F2937" />
+                </button>
+                <div style={styles.headerTitleBadge}>
+                    <span style={{ fontWeight: 'bold', color: '#1F2937' }}>My Vehicles</span>
+                    <span style={{ background: '#E5E7EB', padding: '2px 8px', borderRadius: 10, fontSize: 12, marginLeft: 8, color: '#4B5563' }}>{vehicles.length}</span>
+                </div>
+            </div>
+
+            {/* MAP */}
+            <div style={{ width: '100%', height: '100%' }}>
+                {isLoaded && (
                     <GoogleMap
                         mapContainerStyle={{ width: '100%', height: '100%' }}
                         center={selectedVehicle?.lat ? { lat: selectedVehicle.lat, lng: selectedVehicle.lng } : defaultCenter}
                         zoom={16}
                         onLoad={onLoad}
                         onUnmount={onUnmount}
-                        options={{
-                            disableDefaultUI: true,
-                            zoomControl: false,
-                            fullscreenControl: false,
-                        }}
+                        options={{ disableDefaultUI: true, zoomControl: false, }}
                     >
                         {vehicles.map((v) => v.lat && (
                             <Marker
                                 key={v.id}
                                 position={{ lat: v.lat, lng: v.lng }}
-                                onClick={() => setSelectedVehicle(v)}
+                                onClick={() => { setSelectedVehicle(v); map?.panTo({ lat: v.lat, lng: v.lng }); }}
                                 icon={{
                                     url: "data:image/svg+xml," + encodeURIComponent(`
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
-                                    <circle cx="20" cy="20" r="14" fill="${(v.status || "").includes("STOLEN") ? "#EF4444" : "#EA4335"
-                                        }" stroke="white" stroke-width="2"/>
-                                    <text x="20" y="25" text-anchor="middle" fill="white" font-size="20">📍</text>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60" width="60" height="60">
+                                    <circle cx="30" cy="30" r="28" fill="rgba(59, 130, 246, 0.2)" />
+                                    <circle cx="30" cy="30" r="12" fill="${v.id === selectedVehicle?.id ? '#2563EB' : '#94A3B8'}" stroke="white" stroke-width="3"/>
                                 </svg>
                             `),
-                                    scaledSize: { width: 40, height: 40 },
-                                    anchor: { x: 20, y: 20 },
+                                    scaledSize: { width: 60, height: 60 },
+                                    anchor: { x: 30, y: 30 },
                                 }}
                             />
                         ))}
                     </GoogleMap>
-                ) : <div style={{ padding: 20 }}>Loading Maps...</div>}
+                )}
             </div>
 
-            {/* Hamburger Button */}
-            <button style={styles.menuBtn} onClick={() => setMenuOpen(true)}>
-                <Menu size={24} color="#333" />
-            </button>
+            {/* SWIPEABLE CARD CAROUSEL */}
+            <div style={styles.carouselContainer}>
+                <div style={styles.carouselScroll}>
+                    {vehicles.map((v, i) => {
+                        const isSelected = selectedVehicle?.id === v.id;
+                        const status = STATUS_CONFIG[v.status] || STATUS_CONFIG['NORMAL'];
 
-            {/* Bottom Floating Card (The ONE from the image) */}
-            {selectedVehicle && (
-                <div style={styles.floatCard}>
-                    {/* Top Part: Grey */}
-                    <div style={styles.cardHeader}>
-                        <div>
-                            <div style={styles.statusLabel}>รถจอด ณ จุดนี้ตั้งแต่</div>
-                            <div style={styles.timeLabel}>{updateInfo.time}</div>
-                        </div>
-                        <div style={styles.durationLabel}>{updateInfo.duration}</div>
-                    </div>
-
-                    {/* Bottom Part: White */}
-                    <div style={styles.cardBody}>
-                        <div style={{ flex: 1 }}>
-                            <div style={styles.plateNumber}>{selectedVehicle.plate_number}</div>
-                            <div style={{ ...styles.statusText, color: STATUS_CONFIG[selectedVehicle.status]?.color }}>
-                                {STATUS_CONFIG[selectedVehicle.status]?.label || 'สถานะปกติ'}
-                            </div>
-                        </div>
-                        {/* Optional: Add small navigation icon if needed, but keeping it minimal as per ref image */}
-                        <button style={styles.navBtn} onClick={() => window.open(`https://maps.google.com/?q=${selectedVehicle.lat},${selectedVehicle.lng}`)}>
-                            <Navigation size={20} color="#fff" />
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Side Menu */}
-            {menuOpen && (
-                <div style={styles.menuOverlay} onClick={() => setMenuOpen(false)}>
-                    <div style={styles.menu} onClick={e => e.stopPropagation()}>
-                        <div style={styles.menuHeader}>
-                            <h2>รายการรถ</h2>
-                            <button onClick={() => setMenuOpen(false)}><X size={24} /></button>
-                        </div>
-                        {vehicles.map(v => (
-                            <div key={v.id} style={{
-                                ...styles.menuItem,
-                                background: selectedVehicle?.id === v.id ? '#F3F4F6' : 'transparent'
-                            }} onClick={() => { setSelectedVehicle(v); setMenuOpen(false); }}>
-                                <div>
-                                    <div style={{ fontWeight: 'bold' }}>{v.plate_number}</div>
-                                    <div style={{ fontSize: 12, color: '#666' }}>{v.driver_name}</div>
+                        return (
+                            <motion.div
+                                key={v.id}
+                                style={{
+                                    ...styles.vehicleCard,
+                                    border: isSelected ? '2px solid #2563EB' : '1px solid #fff',
+                                    opacity: isSelected ? 1 : 0.8,
+                                    transform: isSelected ? 'scale(1)' : 'scale(0.95)'
+                                }}
+                                onClick={() => selectVehicleByIndex(i)}
+                                initial={{ y: 50, opacity: 0 }}
+                                animate={{ y: 0, opacity: isSelected ? 1 : 0.7 }}
+                                transition={{ duration: 0.3 }}
+                            >
+                                {/* Upper Status Line */}
+                                <div style={styles.cardHeader}>
+                                    <span style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>
+                                        {v.status === 'NORMAL' ? 'จอดอยู่' : status.label}
+                                    </span>
+                                    <span style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>
+                                        {getDuration(v.last_update)}
+                                    </span>
                                 </div>
-                                {selectedVehicle?.id === v.id && <div style={styles.activeDot}></div>}
-                            </div>
-                        ))}
 
-                        <div style={{ marginTop: 'auto', borderTop: '1px solid #eee', paddingTop: 10 }}>
-                            <button style={styles.menuActionBtn} onClick={openAddVehicle}>
-                                <Plus size={18} /> เพิ่มรถใหม่
-                            </button>
-                            <button style={{ ...styles.menuActionBtn, color: '#EF4444' }} onClick={() => {
-                                localStorage.removeItem('gps_user_token');
-                                setStep('login');
-                            }}>
-                                <LogOut size={18} /> ออกจากระบบ
-                            </button>
+                                <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 15 }}>
+                                    พิกัดล่าสุด • {v.lat?.toFixed(4)}, {v.lng?.toFixed(4)}
+                                </div>
+
+                                {/* Driver & Plate Info */}
+                                <div style={styles.cardInfo}>
+                                    <div style={styles.avatar}>
+                                        <User size={24} color="#6B7280" />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={styles.plateNumber}>{v.plate_number}</div>
+                                        <div style={styles.driverName}>{v.driver_name} • Toyota Camry</div> {/* Mock model */}
+                                    </div>
+                                    <button style={styles.callBtn}>
+                                        <Phone size={20} color="#1F2937" />
+                                    </button>
+                                </div>
+
+                                {/* Action Button (Navigation) */}
+                                {isSelected && (
+                                    <button style={styles.navBtn} onClick={(e) => { e.stopPropagation(); window.open(`https://maps.google.com/?q=${v.lat},${v.lng}`); }}>
+                                        <Navigation size={18} color="white" style={{ marginRight: 8 }} /> นำทาง (Google Maps)
+                                    </button>
+                                )}
+                            </motion.div>
+                        );
+                    })}
+
+                    {/* Add New Card (End of list) */}
+                    <div style={{ ...styles.vehicleCard, justifyContent: 'center', alignItems: 'center', minWidth: '85%' }} onClick={openAddVehicle}>
+                        <div style={{ background: '#F3F4F6', borderRadius: '50%', width: 50, height: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
+                            <Plus size={24} color="#4B5563" />
                         </div>
+                        <div style={{ fontWeight: 'bold', color: '#4B5563' }}>เพิ่มรถใหม่</div>
                     </div>
                 </div>
-            )}
+            </div>
 
-            {/* Add Vehicle Modal */}
+            {/* MENU FULLSCREEN OVERLAY */}
+            <AnimatePresence>
+                {menuOpen && (
+                    <motion.div
+                        initial={{ x: '-100%' }}
+                        animate={{ x: 0 }}
+                        exit={{ x: '-100%' }}
+                        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                        style={styles.menuContainer}
+                    >
+                        <div style={styles.menuHeader}>
+                            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#111' }}>Menu</div>
+                            <button onClick={() => setMenuOpen(false)} style={styles.closeBtn}><X size={24} /></button>
+                        </div>
+
+                        <div style={styles.menuList}>
+                            <div style={styles.menuItem} onClick={openAddVehicle}>
+                                <Plus size={20} /> <span>เพิ่มรถใหม่</span> <ChevronRight size={16} style={{ marginLeft: 'auto' }} />
+                            </div>
+                            <div style={styles.menuItem}>
+                                <User size={20} /> <span>ข้อมูลส่วนตัว</span> <ChevronRight size={16} style={{ marginLeft: 'auto' }} />
+                            </div>
+                            <div style={{ ...styles.menuItem, color: 'red', marginTop: 20 }} onClick={() => { localStorage.removeItem('gps_user_token'); setStep('login'); }}>
+                                <LogOut size={20} /> <span>ออกจากระบบ</span>
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: 'auto', color: '#9CA3AF', fontSize: 12, textAlign: 'center', padding: 20 }}>
+                            GPS Tracker App v1.2.0
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Modal Add Vehicle */}
             {addingVehicle && (
                 <div style={styles.modalOverlay}>
                     <div style={styles.modal}>
@@ -374,74 +355,71 @@ export default function UserApp() {
                     </div>
                 </div>
             )}
+
         </div>
     );
 }
 
 const styles = {
-    appContainer: { height: '100vh', width: '100%', position: 'relative', background: '#fff' },
-    mapContainer: { width: '100%', height: '100%' },
+    appContainer: { height: '100vh', width: '100%', position: 'relative', background: '#fff', overflow: 'hidden' },
 
     // Auth
-    authContainer: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F1F5F9' },
-    authBox: { background: 'white', padding: 30, borderRadius: 20, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', width: '90%', maxWidth: 350, textAlign: 'center' },
-    logo: { fontSize: 40, marginBottom: 15 },
-    input: { width: '100%', padding: 12, borderRadius: 8, border: '1px solid #E2E8F0', marginBottom: 10, fontSize: 16, outline: 'none' },
-    primaryBtn: { width: '100%', padding: 12, borderRadius: 8, border: 'none', background: '#000', color: 'white', fontWeight: 'bold', cursor: 'pointer', marginTop: 10 },
-    error: { color: 'red', fontSize: 13, marginBottom: 10 },
+    authContainer: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F8FAFC' },
+    authBox: { background: 'white', padding: 30, borderRadius: 24, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', width: '90%', maxWidth: 350, textAlign: 'center' },
+    logo: { fontSize: 48, marginBottom: 10 },
+    input: { width: '100%', padding: 14, borderRadius: 12, border: '1px solid #E2E8F0', marginBottom: 12, fontSize: 16, outline: 'none', background: '#F8FAFC' },
+    primaryBtn: { width: '100%', padding: 14, borderRadius: 12, border: 'none', background: '#111827', color: 'white', fontWeight: 'bold', cursor: 'pointer', marginTop: 10, fontSize: 16 },
+    error: { color: '#EF4444', fontSize: 13, marginBottom: 10 },
 
-    // UI Elements
-    menuBtn: { position: 'absolute', top: 'max(15px, env(safe-area-inset-top))', left: 20, background: 'white', border: 'none', borderRadius: 8, padding: 8, boxShadow: '0 2px 5px rgba(0,0,0,0.1)', cursor: 'pointer', zIndex: 50 },
+    // Header Element
+    headerFloating: { position: 'absolute', top: 'max(20px, env(safe-area-inset-top))', left: 20, right: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 10, pointerEvents: 'none' },
+    menuIconBtn: { background: 'white', border: 'none', borderRadius: '50%', width: 45, height: 45, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', cursor: 'pointer', pointerEvents: 'auto' },
+    headerTitleBadge: { background: 'white', padding: '8px 16px', borderRadius: 20, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center' },
 
-    // Floating Card (Reference Image Style)
-    floatCard: {
+    // Carousel Slider
+    carouselContainer: {
         position: 'absolute',
         bottom: 'max(20px, env(safe-area-inset-bottom))',
-        left: 20,
-        right: 20,
+        left: 0,
+        width: '100%',
+        zIndex: 20,
+        overflowX: 'auto',
+        scrollbarWidth: 'none', // Hide scrollbar
+    },
+    carouselScroll: {
+        display: 'flex',
+        padding: '0 20px',
+        gap: 15,
+        width: 'max-content', // Allow content to overflow horizontally
+    },
+    vehicleCard: {
         background: 'white',
         borderRadius: 20,
+        padding: 20,
+        minWidth: '85vw', // Take most of screen width
+        maxWidth: 350,
         boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
-        overflow: 'hidden',
-        zIndex: 50,
-    },
-    cardHeader: {
-        background: '#E2E8F0', // Light Grey
-        padding: '15px 20px',
         display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
+        flexDirection: 'column',
     },
-    statusLabel: { fontSize: 12, color: '#64748B', fontWeight: 'bold' },
-    timeLabel: { fontSize: 16, color: '#1E293B', fontWeight: 'bold', marginTop: 2 },
-    durationLabel: { fontSize: 14, color: '#1E293B', fontWeight: 'bold' },
+    cardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
+    cardInfo: { display: 'flex', alignItems: 'center', gap: 15, marginBottom: 15 },
+    avatar: { width: 50, height: 50, borderRadius: '50%', background: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+    plateNumber: { fontSize: 20, fontWeight: 'bold', color: '#111827' },
+    driverName: { fontSize: 13, color: '#6B7280' },
+    callBtn: { width: 45, height: 45, borderRadius: 12, border: '1px solid #E5E7EB', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' },
+    navBtn: { width: '100%', padding: 12, borderRadius: 12, border: 'none', background: '#111827', color: 'white', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
 
-    cardBody: {
-        background: 'white',
-        padding: '20px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between'
-    },
-    plateNumber: { fontSize: 28, fontWeight: 'bold', color: '#000' },
-    statusText: { fontSize: 14, fontWeight: 'bold', marginTop: 5 },
-    navBtn: {
-        width: 45, height: 45, borderRadius: '50%', background: '#3B82F6', border: 'none',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-        boxShadow: '0 4px 6px -1px rgba(59, 130, 246, 0.5)'
-    },
-
-    // Menu
-    menuOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100 },
-    menu: { width: '80%', maxWidth: 300, height: '100%', background: 'white', padding: 20, paddingTop: 'max(20px, env(safe-area-inset-top))', display: 'flex', flexDirection: 'column' },
-    menuHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-    menuItem: { padding: 12, borderRadius: 8, marginBottom: 5, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-    activeDot: { width: 8, height: 8, background: '#000', borderRadius: '50%' },
-    menuActionBtn: { width: '100%', padding: 12, background: 'transparent', border: 'none', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' },
+    // Menu Overlay
+    menuContainer: { position: 'fixed', inset: 0, background: 'white', zIndex: 100, padding: 20, paddingTop: 'max(20px, env(safe-area-inset-top))', display: 'flex', flexDirection: 'column' },
+    menuHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 },
+    closeBtn: { background: '#F3F4F6', border: 'none', borderRadius: '50%', width: 40, height: 40, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+    menuList: { display: 'flex', flexDirection: 'column', gap: 10 },
+    menuItem: { display: 'flex', alignItems: 'center', gap: 15, padding: 16, borderRadius: 12, background: '#F8FAFC', cursor: 'pointer', fontSize: 16, fontWeight: '500', color: '#374151' },
 
     // Modal
-    modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center' },
-    modal: { background: 'white', width: '85%', maxWidth: 320, padding: 20, borderRadius: 16 },
-    cancelBtn: { flex: 1, padding: 10, background: '#F1F5F9', border: 'none', borderRadius: 8 },
-    confirmBtn: { flex: 1, padding: 10, background: '#000', color: 'white', border: 'none', borderRadius: 8 }
+    modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' },
+    modal: { background: 'white', width: '85%', maxWidth: 340, padding: 24, borderRadius: 24, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' },
+    cancelBtn: { flex: 1, padding: 12, background: '#F1F5F9', border: 'none', borderRadius: 12, color: '#4B5563', fontWeight: '600' },
+    confirmBtn: { flex: 1, padding: 12, background: '#2563EB', color: 'white', border: 'none', borderRadius: 12, fontWeight: '600' }
 };
