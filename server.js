@@ -248,7 +248,7 @@ nextApp.prepare().then(() => {
 
         db.get("SELECT * FROM credentials WHERE code = ?", [code.toUpperCase()], (err, row) => {
             if (err) return res.status(500).json({ error: err.message });
-            if (!row) return res.status(404).json({ error: "Invalid code", valid: false });
+            if (!row) return res.status(404).json({ error: "Invalid code" });
 
             // Check if already registered
             db.get("SELECT * FROM vehicles WHERE credential_code = ?", [code.toUpperCase()], (err2, vehicle) => {
@@ -262,11 +262,31 @@ nextApp.prepare().then(() => {
         });
     });
 
-    // 📝 Register vehicle (User)
+    // 📱 Login with Phone Number (Check if user exists)
+    app.post('/api/user/login', (req, res) => {
+        const { phone_number } = req.body;
+        if (!phone_number) return res.status(400).json({ error: "Phone number required" });
+
+        // Check if any vehicle is linked to this phone number (user_token)
+        db.all("SELECT * FROM vehicles WHERE user_token = ?", [phone_number], (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (rows && rows.length > 0) {
+                // User exists, return vehicles for auto-login
+                res.json({ exists: true, user_token: phone_number, count: rows.length });
+            } else {
+                // New user
+                res.json({ exists: false });
+            }
+        });
+    });
+
+    // 📝 Register vehicle (First time / New User)
     app.post('/api/user/register', (req, res) => {
-        const { code, plate_number, driver_name, emergency_phone, user_token } = req.body;
-        if (!code || !plate_number || !driver_name) {
-            return res.status(400).json({ error: "Missing required fields" });
+        const { code, plate_number, driver_name, emergency_phone, phone_number } = req.body;
+
+        // phone_number MUST be provided as it becomes the user_token
+        if (!code || !plate_number || !phone_number) {
+            return res.status(400).json({ error: "Missing required fields (code, plate, phone)" });
         }
 
         // Verify credential exists
@@ -274,13 +294,13 @@ nextApp.prepare().then(() => {
             if (err) return res.status(500).json({ error: err.message });
             if (!cred) return res.status(404).json({ error: "Invalid credential" });
 
-            const vehicleName = `${plate_number} - ${driver_name}`;
-            const token = user_token || Math.random().toString(36).substring(2, 15);
+            const vehicleName = `${plate_number} - ${driver_name || 'Driver'}`;
+            const token = phone_number; // Use Phone Number as Token
 
             // Insert vehicle
             db.run(`INSERT INTO vehicles (credential_code, device_id, plate_number, driver_name, emergency_phone, vehicle_name, user_token)
                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [code.toUpperCase(), cred.device_id, plate_number, driver_name, emergency_phone || '', vehicleName, token],
+                [code.toUpperCase(), cred.device_id, plate_number, driver_name || '', emergency_phone || '', vehicleName, token],
                 function (err) {
                     if (err) return res.status(500).json({ error: err.message });
 
