@@ -6,7 +6,7 @@ import { Toaster, toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Car, MapPin, Navigation, History, LogOut, Plus,
-    Menu, X, CheckCircle, AlertTriangle, Clock, RefreshCw, User, ShieldCheck
+    Menu, X, CheckCircle, AlertTriangle, Clock, RefreshCw, User, ShieldCheck, LocateFixed
 } from 'lucide-react';
 
 const GOOGLE_MAPS_API_KEY = "AIzaSyACWF7KC20kJzTuxl-AicAuANdZaP7U74Q";
@@ -32,12 +32,14 @@ export default function UserApp() {
     // Map State
     const { isLoaded } = useJsApiLoader({ googleMapsApiKey: GOOGLE_MAPS_API_KEY });
     const [map, setMap] = useState(null);
+    const [viewState, setViewState] = useState('live'); // 'live' | 'history_focus'
+    const [historyFocus, setHistoryFocus] = useState(null); // { lat, lng, time }
 
     // Forms
     const [loginPhone, setLoginPhone] = useState('');
     const [regForm, setRegForm] = useState({ code: '', plate: '', driver: '', phone: '' });
 
-    // History Data (Mock for now, or fetch from API)
+    // History Data
     const [historyLogs, setHistoryLogs] = useState([]);
 
     // --- 1. INITIALIZE ---
@@ -65,8 +67,8 @@ export default function UserApp() {
         socket.on('device_update', (data) => {
             setVehicles(prev => prev.map(v => {
                 if (v.device_id === data.device_id) {
-                    // Check Alert
-                    if (data.status === '1' || data.status === '2') {
+                    // Check Alert (Only trigger if status CHANGED to alert, to avoid spam)
+                    if ((data.status === '1' || data.status === '2') && v.status !== data.status) {
                         triggerNotification(v.plate_number, data.status);
                     }
                     return { ...v, ...data, last_update: new Date().toISOString() };
@@ -78,8 +80,16 @@ export default function UserApp() {
         return () => socket.disconnect();
     }, [authState]);
 
+    // Request Permission on Load/Login
+    useEffect(() => {
+        if (authState === 'app' && 'Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+    }, [authState]);
+
     const triggerNotification = (plate, status) => {
         const label = status === '1' ? 'ถูกขโมย!' : 'เกิดอุบัติเหตุ!';
+        // In-App Toast
         toast((t) => (
             <div className="flex items-center gap-3" onClick={() => toast.dismiss(t.id)}>
                 <div className="bg-red-100 p-2 rounded-full text-red-600"><AlertTriangle /></div>
@@ -90,8 +100,12 @@ export default function UserApp() {
             </div>
         ), { duration: 5000, position: 'top-center' });
 
+        // Browser Notification
         if (Notification.permission === 'granted') {
-            new Notification(`🚨 แจ้งเตือน: ${plate}`, { body: `สถานะ: ${label}` });
+            new Notification(`🚨 แจ้งเตือน: ${plate}`, {
+                body: `สถานะ: ${label}`,
+                icon: '/icon-192.png' // Ensure icon exists or remove
+            });
         }
     };
 
@@ -165,13 +179,7 @@ export default function UserApp() {
                 setAuthState('app');
                 // Select first one if none selected
                 if (!selectedId) setSelectedId(data[0].device_id);
-
-                // Ask Noti Permission
-                if ('Notification' in window && Notification.permission === 'default') {
-                    Notification.requestPermission();
-                }
             } else {
-                // No vehicles found (shouldn't happen if login check passed, but just in case)
                 setAuthState('register');
             }
         } catch (err) {
@@ -187,6 +195,50 @@ export default function UserApp() {
             setHistoryLogs(data);
         } catch (e) { console.error(e); }
     };
+
+    const handleMyLocation = () => {
+        if (navigator.geolocation && map) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    map.panTo({ lat: latitude, lng: longitude });
+                    map.setZoom(15);
+                    // Add a temporary marker or circle for user location could be good here
+                },
+                (error) => toast.error("ไม่สามารถระบุตำแหน่งของคุณได้")
+            );
+        } else {
+            toast.error("Geolocation ไม่รองรับในเบราว์เซอร์นี้");
+        }
+    };
+
+    const handleHistoryJump = (h) => {
+        setViewState('history_focus');
+        setHistoryFocus(h);
+        if (map) {
+            map.panTo({ lat: h.lat, lng: h.lng });
+            map.setZoom(18);
+        }
+        setShowHistory(false); // Close list to see map
+        toast((t) => (
+            <div className="flex items-center justify-between w-full">
+                <span className="text-sm">📍 ดูประวัติ: {new Date(h.timestamp).toLocaleTimeString()}</span>
+                <button onClick={() => { setViewState('live'); setHistoryFocus(null); toast.dismiss(t.id); }} className="bg-blue-600 text-white px-2 py-1 rounded text-xs ml-2">
+                    กลับสู่ปัจจุบัน
+                </button>
+            </div>
+        ), { duration: 10000, position: 'bottom-center' });
+    };
+
+    const resetToLive = () => {
+        setViewState('live');
+        setHistoryFocus(null);
+        if (selectedVehicle && map) {
+            map.panTo({ lat: selectedVehicle.lat, lng: selectedVehicle.lng });
+            map.setZoom(15);
+        }
+    };
+
 
     // --- 4. RENDER ---
 
@@ -276,12 +328,17 @@ export default function UserApp() {
 
             {/* Header Bar */}
             <div className="absolute top-0 left-0 right-0 z-10 flex justify-between items-center p-4 bg-gradient-to-b from-white/90 to-transparent pointer-events-none pb-12">
-                <div className="pointer-events-auto bg-white shadow rounded-full px-4 py-2 flex items-center gap-2" onClick={() => setMenuOpen(true)}>
+                <div className="pointer-events-auto bg-white shadow rounded-full px-4 py-2 flex items-center gap-2 cursor-pointer active:scale-95 transition" onClick={() => setMenuOpen(true)}>
                     <Menu size={20} className="text-gray-700" />
                     <span className="text-xs font-bold text-gray-700">{vehicles.length} คัน</span>
                 </div>
+
                 <div className="flex gap-2 pointer-events-auto">
-                    <button onClick={() => setShowAddVehicle(true)} className="bg-white p-2 rounded-full shadow text-blue-600"><Plus size={20} /></button>
+                    {/* My Location Button */}
+                    <button onClick={handleMyLocation} className="bg-white p-2 rounded-full shadow text-gray-700 active:bg-blue-50">
+                        <LocateFixed size={20} />
+                    </button>
+                    {/* Add Vehicle Button MOVED to Card Slide, but keeping specific add flow logic for now here hidden or just rely on slide */}
                 </div>
             </div>
 
@@ -290,12 +347,17 @@ export default function UserApp() {
                 {isLoaded ? (
                     <GoogleMap
                         mapContainerStyle={{ width: '100%', height: '100%' }}
-                        center={{ lat: selectedVehicle?.lat || 13.75, lng: selectedVehicle?.lng || 100.50 }}
+                        center={
+                            viewState === 'history_focus' && historyFocus
+                                ? { lat: historyFocus.lat, lng: historyFocus.lng }
+                                : { lat: selectedVehicle?.lat || 13.75, lng: selectedVehicle?.lng || 100.50 }
+                        }
                         zoom={15}
                         onLoad={setMap}
                         options={{ disableDefaultUI: true, zoomControl: false }}
                     >
-                        {vehicles.map(v => (
+                        {/* Live Vehicles */}
+                        {viewState === 'live' && vehicles.map(v => (
                             <Marker
                                 key={v.device_id}
                                 position={{ lat: v.lat || 0, lng: v.lng || 0 }}
@@ -318,6 +380,21 @@ export default function UserApp() {
                                 }}
                             />
                         ))}
+
+                        {/* History Focus Marker */}
+                        {viewState === 'history_focus' && historyFocus && (
+                            <Marker
+                                position={{ lat: historyFocus.lat, lng: historyFocus.lng }}
+                                icon={{
+                                    path: window.google?.maps?.SymbolPath?.CIRCLE,
+                                    scale: 8,
+                                    fillColor: "#2563EB",
+                                    fillOpacity: 1,
+                                    strokeWeight: 2,
+                                    strokeColor: "#FFFFFF",
+                                }}
+                            />
+                        )}
                     </GoogleMap>
                 ) : <div className="h-full flex items-center justify-center">Loading Map...</div>}
             </div>
@@ -325,16 +402,7 @@ export default function UserApp() {
             {/* Swipeable Cards */}
             <div
                 className="absolute bottom-14 left-0 w-full z-20 overflow-x-auto no-scrollbar px-[3%] flex gap-3 snap-x snap-mandatory pb-safe"
-                onScroll={(e) => {
-                    // Optional: Simple snap detection to update selectedId on swipe
-                    const container = e.target;
-                    const cardWidth = container.offsetWidth * 0.94; // 94% width
-                    const index = Math.round(container.scrollLeft / cardWidth);
-                    if (vehicles[index] && vehicles[index].device_id !== selectedId) {
-                        // Debounce or just set (can cause re-renders) - sticking to click for now to be safe
-                        // setSelectedId(vehicles[index].device_id); 
-                    }
-                }}
+                onClick={() => { if (viewState === 'history_focus') resetToLive(); }}
             >
                 {vehicles.map((v) => {
                     const isSelected = selectedId === v.device_id;
@@ -343,7 +411,7 @@ export default function UserApp() {
                     return (
                         <div
                             key={v.device_id}
-                            onClick={() => { setSelectedId(v.device_id); map?.panTo({ lat: v.lat, lng: v.lng }); }}
+                            onClick={() => { setSelectedId(v.device_id); resetToLive(); }}
                             className={`
                         snap-center min-w-[94%] bg-white rounded-2xl p-5 shadow-xl border border-gray-100 flex-shrink-0
                         transition-all duration-300
@@ -361,7 +429,7 @@ export default function UserApp() {
 
                             <div className="mb-6 pl-1">
                                 <h2 className="text-3xl font-black text-gray-900 tracking-tight">{v.license_plate || v.plate_number || 'ไม่ระบุทะเบียน'}</h2>
-                                <p className="text-sm text-gray-500 font-medium">{v.owner_name || v.driver_name || 'Driver'} • Tracker</p>
+                                <p className="text-sm text-gray-500 font-medium">{v.owner_name || v.driver_name || 'Driver'}</p>
                             </div>
 
                             <div className="grid grid-cols-2 gap-3">
@@ -369,7 +437,7 @@ export default function UserApp() {
                                     onClick={(e) => { e.stopPropagation(); setSelectedId(v.device_id); fetchHistory(v.device_id); setShowHistory(true); }}
                                     className="flex items-center justify-center gap-2 bg-gray-50 active:bg-gray-100 text-gray-700 py-3 rounded-xl font-bold text-sm transition border border-gray-200"
                                 >
-                                    <History size={18} /> ประวัติ
+                                    <History size={18} /> ประวัติแจ้งเตือน
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); window.open(`https://www.google.com/maps/dir/?api=1&destination=${v.lat},${v.lng}`, '_blank'); }}
@@ -381,6 +449,16 @@ export default function UserApp() {
                         </div>
                     );
                 })}
+
+                {/* Add Vehicle Card (Last Item) */}
+                <div
+                    onClick={() => setShowAddVehicle(true)}
+                    className="snap-center min-w-[94%] bg-gray-50 rounded-2xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center p-6 text-gray-400 flex-shrink-0 cursor-pointer hover:bg-gray-100 transition"
+                >
+                    <div className="bg-white p-4 rounded-full shadow-sm mb-2 text-blue-500"><Plus size={32} /></div>
+                    <span className="font-bold text-lg text-gray-600">เพิ่มรถใหม่</span>
+                    <span className="text-sm text-gray-400">Add New Vehicle</span>
+                </div>
             </div>
 
             {/* Pagination Dots */}
@@ -391,6 +469,8 @@ export default function UserApp() {
                         className={`h-2 rounded-full transition-all duration-300 shadow-sm ${selectedId === v.device_id ? 'w-6 bg-blue-600' : 'w-2 bg-gray-300'}`}
                     />
                 ))}
+                {/* Dot for Add Card */}
+                <div className="h-2 w-2 rounded-full bg-gray-300 shadow-sm" />
             </div>
 
             {/* History List Popup */}
@@ -414,7 +494,9 @@ export default function UserApp() {
                                 {historyLogs.map((h, i) => {
                                     const st = STATUS_CONFIG[h.status] || STATUS_CONFIG['0'];
                                     return (
-                                        <div key={i} className="flex gap-4 items-start group" onClick={() => { map?.panTo({ lat: h.lat, lng: h.lng }); setShowHistory(false); }}>
+                                        <div key={i} className="flex gap-4 items-start group cursor-pointer active:bg-gray-50 p-2 rounded-lg transition"
+                                            onClick={() => handleHistoryJump(h)}
+                                        >
                                             <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${st.bg} ${st.color}`}>{st.icon}</div>
                                             <div className="flex-1 pb-4 border-b border-gray-50">
                                                 <div className="flex justify-between">
@@ -453,7 +535,7 @@ export default function UserApp() {
             {/* Menu Overlay */}
             <AnimatePresence>
                 {menuOpen && (
-                    <motion.div initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} className="fixed top-0 left-0 bottom-0 w-3/4 max-w-sm bg-white z-50 p-6 shadow-2xl">
+                    <motion.div initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} className="fixed top-0 left-0 bottom-0 w-3/4 max-w-sm bg-white z-50 p-6 shadow-2xl overflow-y-auto">
                         <div className="flex justify-between items-center mb-8">
                             <h2 className="text-2xl font-bold">เมนู</h2>
                             <button onClick={() => setMenuOpen(false)}><X /></button>
@@ -462,10 +544,23 @@ export default function UserApp() {
                             <div className="text-xs text-gray-400">เข้าสู่ระบบด้วยเบอร์</div>
                             <div className="text-xl font-bold text-gray-800">{userPhone}</div>
                         </div>
-                        <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="flex items-center gap-2 text-red-500 font-bold p-2 hover:bg-red-50 rounded w-full">
+
+                        <div className="space-y-2 mb-6">
+                            <div className="text-sm font-bold text-gray-400 px-2 mb-2">การตั้งค่า</div>
+
+                            <button className="flex items-center gap-3 p-3 w-full hover:bg-gray-50 rounded-xl text-left" onClick={() => toast("ฟีเจอร์นี้จะมาเร็วๆนี้")}>
+                                <ShieldCheck className="text-blue-600" size={20} />
+                                <div className="flex-1">
+                                    <div className="font-bold text-gray-700">โหมดจอดรถ (Anti-Theft)</div>
+                                    <div className="text-xs text-gray-400">ตั้งค่าจุดจอดและแจ้งเตือนเมื่อหลุด</div>
+                                </div>
+                            </button>
+                        </div>
+
+                        <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="flex items-center gap-2 text-red-500 font-bold p-3 hover:bg-red-50 rounded-xl w-full">
                             <LogOut size={20} /> ออกจากระบบ
                         </button>
-                        <div className="absolute bottom-6 text-xs text-gray-300 text-center w-full left-0">Version 1.2.0 (Ride-Hailing UI)</div>
+                        <div className="mt-10 text-xs text-gray-300 text-center w-full">Version 1.3.0 (Beta)</div>
                     </motion.div>
                 )}
             </AnimatePresence>
