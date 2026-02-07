@@ -323,7 +323,19 @@ export default function UserApp() {
             </div>
 
             {/* Swipeable Cards */}
-            <div className="absolute bottom-6 left-0 w-full z-20 overflow-x-auto no-scrollbar px-6 flex gap-4 snap-x snap-mandatory pb-safe">
+            <div
+                className="absolute bottom-14 left-0 w-full z-20 overflow-x-auto no-scrollbar px-[3%] flex gap-3 snap-x snap-mandatory pb-safe"
+                onScroll={(e) => {
+                    // Optional: Simple snap detection to update selectedId on swipe
+                    const container = e.target;
+                    const cardWidth = container.offsetWidth * 0.94; // 94% width
+                    const index = Math.round(container.scrollLeft / cardWidth);
+                    if (vehicles[index] && vehicles[index].device_id !== selectedId) {
+                        // Debounce or just set (can cause re-renders) - sticking to click for now to be safe
+                        // setSelectedId(vehicles[index].device_id); 
+                    }
+                }}
+            >
                 {vehicles.map((v) => {
                     const isSelected = selectedId === v.device_id;
                     const st = STATUS_CONFIG[v.status] || STATUS_CONFIG['0'];
@@ -333,7 +345,7 @@ export default function UserApp() {
                             key={v.device_id}
                             onClick={() => { setSelectedId(v.device_id); map?.panTo({ lat: v.lat, lng: v.lng }); }}
                             className={`
-                        snap-center min-w-[90%] max-w-[400px] bg-white rounded-2xl p-5 shadow-xl border border-gray-100 flex-shrink-0
+                        snap-center min-w-[94%] bg-white rounded-2xl p-5 shadow-xl border border-gray-100 flex-shrink-0
                         transition-all duration-300
                         ${isSelected ? 'ring-2 ring-blue-500 scale-100' : 'scale-95 opacity-90'}
                     `}
@@ -357,7 +369,7 @@ export default function UserApp() {
                                     onClick={(e) => { e.stopPropagation(); setSelectedId(v.device_id); fetchHistory(v.device_id); setShowHistory(true); }}
                                     className="flex items-center justify-center gap-2 bg-gray-50 active:bg-gray-100 text-gray-700 py-3 rounded-xl font-bold text-sm transition border border-gray-200"
                                 >
-                                    <History size={18} /> ประวัติแจ้งเตือน
+                                    <History size={18} /> ประวัติ
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); window.open(`https://www.google.com/maps/dir/?api=1&destination=${v.lat},${v.lng}`, '_blank'); }}
@@ -369,6 +381,16 @@ export default function UserApp() {
                         </div>
                     );
                 })}
+            </div>
+
+            {/* Pagination Dots */}
+            <div className="absolute bottom-6 left-0 w-full z-20 flex justify-center gap-2 pb-safe pointer-events-none">
+                {vehicles.map((v) => (
+                    <div
+                        key={v.device_id}
+                        className={`h-2 rounded-full transition-all duration-300 shadow-sm ${selectedId === v.device_id ? 'w-6 bg-blue-600' : 'w-2 bg-gray-300'}`}
+                    />
+                ))}
             </div>
 
             {/* History List Popup */}
