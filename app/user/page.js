@@ -1,26 +1,14 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
-import dynamic from "next/dynamic";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { GoogleMap, useJsApiLoader, Marker } from "@react-google-maps/api";
+import { Toaster, toast } from "react-hot-toast";
 
-// Dynamic import for Leaflet (no SSR)
-const MapContainer = dynamic(
-    () => import("react-leaflet").then((mod) => mod.MapContainer),
-    { ssr: false }
-);
-const TileLayer = dynamic(
-    () => import("react-leaflet").then((mod) => mod.TileLayer),
-    { ssr: false }
-);
-const Marker = dynamic(
-    () => import("react-leaflet").then((mod) => mod.Marker),
-    { ssr: false }
-);
-const Popup = dynamic(
-    () => import("react-leaflet").then((mod) => mod.Popup),
-    { ssr: false }
-);
-
+// Server URL
 const SERVER_URL = typeof window !== 'undefined' ? window.location.origin : '';
+const GOOGLE_MAPS_API_KEY = "AIzaSyACWF7KC20kJzTuxl-AicAuANdZaP7U74Q";
+
+// Map Default Center
+const defaultCenter = { lat: 13.7563, lng: 100.5018 }; // Bangkok
 
 // Status config
 const STATUS_CONFIG = {
@@ -38,34 +26,22 @@ export default function UserApp() {
     const [menuOpen, setMenuOpen] = useState(false);
     const [addingVehicle, setAddingVehicle] = useState(false);
 
+    // Google Maps State
+    const [map, setMap] = useState(null);
+    const { isLoaded, loadError } = useJsApiLoader({
+        googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+        language: "th",
+    });
+
     // Form states
     const [credCode, setCredCode] = useState('');
     const [plateNumber, setPlateNumber] = useState('');
     const [driverName, setDriverName] = useState('');
     const [emergencyPhone, setEmergencyPhone] = useState('');
-    const [pendingDevice, setPendingDevice] = useState(null);
     const [error, setError] = useState('');
 
     // Check local storage for existing token
     useEffect(() => {
-        // Load Leaflet CSS
-        const link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        document.head.appendChild(link);
-
-        // Fix Leaflet marker icons
-        if (typeof window !== 'undefined') {
-            import('leaflet').then((L) => {
-                delete L.Icon.Default.prototype._getIconUrl;
-                L.Icon.Default.mergeOptions({
-                    iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-                    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-                    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-                });
-            });
-        }
-
         const token = localStorage.getItem('gps_user_token');
         if (token) {
             setUserToken(token);
@@ -82,7 +58,10 @@ export default function UserApp() {
             const data = await res.json();
             if (data.length > 0) {
                 setVehicles(data);
-                setSelectedVehicle(data[0]);
+                // If we have vehicles, default select the first one if none selected
+                if (!selectedVehicle) {
+                    setSelectedVehicle(data[0]);
+                }
                 setStep('app');
             } else {
                 setStep('login');
@@ -92,6 +71,23 @@ export default function UserApp() {
             setStep('login');
         }
     };
+
+    // Auto-refresh vehicles every 5 seconds (Simple polling instead of Socket for user app stability)
+    useEffect(() => {
+        if (step === 'app' && userToken) {
+            const interval = setInterval(() => {
+                loadVehicles(userToken);
+            }, 5000);
+            return () => clearInterval(interval);
+        }
+    }, [step, userToken]);
+
+    // Center map when vehicle selected
+    useEffect(() => {
+        if (selectedVehicle && map && selectedVehicle.lat && selectedVehicle.lng) {
+            map.panTo({ lat: selectedVehicle.lat, lng: selectedVehicle.lng });
+        }
+    }, [selectedVehicle, map]);
 
     // Verify credential code
     const handleVerify = async () => {
@@ -116,7 +112,6 @@ export default function UserApp() {
                 loadVehicles(data.vehicle.user_token);
             } else {
                 // Need to register
-                setPendingDevice(data.device_id);
                 setStep('register');
             }
         } catch (err) {
@@ -182,6 +177,7 @@ export default function UserApp() {
                 setDriverName('');
                 setEmergencyPhone('');
                 loadVehicles(userToken);
+                toast.success('เพิ่มรถเรียบร้อยแล้ว');
             } else {
                 setError(data.error || 'เกิดข้อผิดพลาด');
             }
@@ -189,6 +185,14 @@ export default function UserApp() {
             setError('เกิดข้อผิดพลาด กรุณาลองใหม่');
         }
     };
+
+    const onLoad = useCallback((map) => {
+        setMap(map);
+    }, []);
+
+    const onUnmount = useCallback(() => {
+        setMap(null);
+    }, []);
 
     // Loading state
     if (step === 'loading') {
@@ -275,6 +279,7 @@ export default function UserApp() {
     // Main App
     return (
         <div style={styles.appContainer}>
+            <Toaster position="top-center" />
             {/* Header */}
             <div style={styles.header}>
                 <button onClick={() => setMenuOpen(true)} style={styles.menuBtn}>☰</button>
@@ -284,22 +289,47 @@ export default function UserApp() {
 
             {/* Map */}
             <div style={styles.mapContainer}>
-                <MapContainer
-                    center={selectedVehicle ? [selectedVehicle.lat || 13.7563, selectedVehicle.lng || 100.5018] : [13.7563, 100.5018]}
-                    zoom={14}
-                    style={{ height: '100%', width: '100%' }}
-                >
-                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                    {vehicles.map((v) => v.lat && v.lng && (
-                        <Marker key={v.id} position={[v.lat, v.lng]}>
-                            <Popup>
-                                <strong>{v.plate_number}</strong><br />
-                                {v.driver_name}<br />
-                                สถานะ: {STATUS_CONFIG[v.status]?.label || v.status}
-                            </Popup>
-                        </Marker>
-                    ))}
-                </MapContainer>
+                {loadError ? (
+                    <div style={{ color: 'white', padding: 20 }}>Map load error</div>
+                ) : !isLoaded ? (
+                    <div style={{ color: 'white', padding: 20 }}>Loading Maps...</div>
+                ) : (
+                    <GoogleMap
+                        mapContainerStyle={{ width: '100%', height: '100%' }}
+                        center={selectedVehicle && selectedVehicle.lat ? { lat: selectedVehicle.lat, lng: selectedVehicle.lng } : defaultCenter}
+                        zoom={15}
+                        onLoad={onLoad}
+                        onUnmount={onUnmount}
+                        options={{
+                            disableDefaultUI: true,
+                            zoomControl: false,
+                            streetViewControl: false,
+                            mapTypeControl: false,
+                            fullscreenControl: false,
+                        }}
+                    >
+                        {vehicles.map((v) => v.lat && v.lng && (
+                            <Marker
+                                key={v.id}
+                                position={{ lat: v.lat, lng: v.lng }}
+                                onClick={() => setSelectedVehicle(v)}
+                                icon={{
+                                    url: "data:image/svg+xml," + encodeURIComponent(`
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+                                    <circle cx="20" cy="20" r="18" fill="${(v.status || "").includes("STOLEN") ? "#EF4444" :
+                                            (v.status || "").includes("CRASH") ? "#F97316" :
+                                                "#3B82F6"
+                                        }" stroke="white" stroke-width="3"/>
+                                    <text x="20" y="26" text-anchor="middle" fill="white" font-size="16">🚗</text>
+                                </svg>
+                            `),
+                                    scaledSize: { width: 40, height: 40 },
+                                    anchor: { x: 20, y: 20 },
+                                }}
+                            />
+                        ))}
+                    </GoogleMap>
+                )}
             </div>
 
             {/* Bottom Sheet - Vehicle Info */}
