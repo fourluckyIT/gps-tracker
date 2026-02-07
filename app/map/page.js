@@ -306,7 +306,8 @@ function MapContent() {
         let gainNode;
         let interval;
 
-        if (isStolen || isCrash) {
+        // Only play if critical status AND not dismissed
+        if ((isStolen || isCrash) && !alertDismissed) {
             try {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 oscillator = audioCtx.createOscillator();
@@ -340,8 +341,7 @@ function MapContent() {
                 try { audioCtx.close(); } catch (e) { }
             }
         };
-    }, [isStolen, isCrash, carStatus]);
-
+    }, [isStolen, isCrash, carStatus, alertDismissed]);
 
 
     // Format parking duration
@@ -357,7 +357,7 @@ function MapContent() {
         return `${hours} ชม. ${mins} นาที`;
     };
 
-    // Update parking time display (client-only to avoid hydration mismatch)
+    // Update parking time display (client-only)
     const [parkingDisplay, setParkingDisplay] = useState("--");
     const [mounted, setMounted] = useState(false);
 
@@ -373,6 +373,7 @@ function MapContent() {
         }, 1000);
         return () => clearInterval(interval);
     }, [parkingStartTime, mounted]);
+
 
     // Open popup to add/edit geofence
     const openGeofencePopup = (index) => {
@@ -821,9 +822,6 @@ function MapContent() {
                             <p>{isStolen ? "มีการพยายามสตาร์ทรถหรือเคลื่อนย้ายโดยไม่ได้รับอนุญาต" : "ตรวจพบการชนหรือการกระแทกรุนแรง"}</p>
 
                             <div className="alert-actions">
-                                <button className="btn-dismiss" onClick={() => setAlertDismissed(true)}>
-                                    รับทราบ (ปิดแจ้งเตือน)
-                                </button>
                                 <button className="btn-dismiss" onClick={() => setAlertDismissed(true)}>
                                     รับทราบ (ปิดแจ้งเตือน)
                                 </button>

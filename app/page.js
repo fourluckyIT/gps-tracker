@@ -80,9 +80,14 @@ export default function Dashboard() {
                 <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
                     🛰️ GPS Tracker Dashboard
                 </h1>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem', color: connected ? '#22C55E' : '#EF4444' }}>
-                    {connected ? <Wifi size={18} /> : <WifiOff size={18} />}
-                    {connected ? "Connected" : "Disconnected"}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <Link href="/simulator" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '8px 16px', borderRadius: '8px', textDecoration: 'none', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                        🧪 Simulator
+                    </Link>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem', color: connected ? '#22C55E' : '#EF4444' }}>
+                        {connected ? <Wifi size={18} /> : <WifiOff size={18} />}
+                        {connected ? "Connected" : "Disconnected"}
+                    </div>
                 </div>
             </header>
 
