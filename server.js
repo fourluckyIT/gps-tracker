@@ -5,6 +5,9 @@ const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const next = require('next');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
+const cookieParser = require('cookie-parser');
 
 const dev = process.env.NODE_ENV !== 'production';
 const nextApp = next({ dev });
@@ -18,6 +21,110 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(bodyParser.text({ type: 'text/*' }));
 app.use(bodyParser.json());
+app.use(cookieParser());
+
+// --- AUTH MIDDLEWARE ---
+const requireAuth = (req, res, next) => {
+    // Allow public routes
+    const publicPaths = [
+        '/api/auth/status',
+        '/api/auth/verify',
+        '/api/auth/setup',
+        '/api/auth/logout',
+        '/api/track', // IoT device input
+        '/api/user/login', // App login
+        '/api/user/verify', // App verify
+        '/api/user/register', // App register
+        '/api/user/add-vehicle', // App add vehicle
+        '/api/user/vehicles' // App list vehicles
+    ];
+
+    if (publicPaths.includes(req.path)) return next();
+
+    // Check cookie
+    const token = req.cookies.admin_token;
+    if (token === 'AUTHENTICATED') {
+        return next();
+    }
+
+    // Attempt to verify 2FA status from DB to ensure it's enabled
+    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
+        const enabled = row && row.value === 'true';
+        if (!enabled) {
+            return next();
+        }
+        res.status(401).json({ error: "Unauthorized" });
+    });
+};
+
+// Apply middleware to API routes only
+app.use('/api', requireAuth);
+
+// --- AUTH ROUTES ---
+
+// Check 2FA Status
+app.get('/api/auth/status', (req, res) => {
+    const token = req.cookies.admin_token;
+    const authenticated = token === 'AUTHENTICATED';
+
+    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
+        const enabled = row ? row.value === 'true' : false;
+        res.json({ enabled, authenticated });
+    });
+});
+
+// Setup 2FA (Generate Secret)
+app.post('/api/auth/setup', (req, res) => {
+    // Check if already enabled
+    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
+        if (row && row.value === 'true') {
+            if (req.cookies.admin_token !== 'AUTHENTICATED') {
+                return res.status(403).json({ error: "2FA already enabled" });
+            }
+        }
+
+        const secret = speakeasy.generateSecret({ name: "GPS Tracker Admin" });
+        db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_secret', ?)", [secret.base32]);
+
+        QRCode.toDataURL(secret.otpauth_url, (err, data_url) => {
+            res.json({ secret: secret.base32, qr_code: data_url });
+        });
+    });
+});
+
+// Verify 2FA & Login
+app.post('/api/auth/verify', (req, res) => {
+    const { token } = req.body;
+
+    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_secret'", (err, row) => {
+        if (!row) return res.status(400).json({ error: "2FA not set up" });
+
+        const dbSecret = row.value;
+        const verified = speakeasy.totp.verify({
+            secret: dbSecret,
+            encoding: 'base32',
+            token: token,
+            window: 1 // Allow 30s drift
+        });
+
+        if (verified) {
+            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_enabled', 'true')");
+            res.cookie('admin_token', 'AUTHENTICATED', {
+                httpOnly: true,
+                maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+            });
+            res.json({ success: true });
+        } else {
+            res.status(401).json({ error: "Invalid code" });
+        }
+    });
+});
+
+// Logout
+app.post('/api/auth/logout', (req, res) => {
+    res.clearCookie('admin_token');
+    res.json({ success: true });
+});
 
 // ========== DATABASE SETUP ==========
 const db = new sqlite3.Database('tracker.db');
@@ -85,6 +192,12 @@ db.serialize(() => {
         radius REAL,
         is_inside INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // Settings (for 2FA)
+    db.run(`CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
     )`);
 });
 
