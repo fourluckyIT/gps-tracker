@@ -23,6 +23,8 @@ app.use(bodyParser.text({ type: 'text/*' }));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
+const crypto = require('crypto');
+
 // --- AUTH MIDDLEWARE ---
 const requireAuth = (req, res, next) => {
     // Allow public routes
@@ -51,7 +53,7 @@ const requireAuth = (req, res, next) => {
     db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
         const enabled = row && row.value === 'true';
         if (!enabled) {
-            return next();
+            return next(); // If security not set up, allow access (or could redirect to setup)
         }
         res.status(401).json({ error: "Unauthorized" });
     });
@@ -73,18 +75,33 @@ app.get('/api/auth/status', (req, res) => {
     });
 });
 
-// Setup 2FA (Generate Secret)
+// Setup 2FA (Email + Password + Generate Secret)
 app.post('/api/auth/setup', (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and Password required" });
+
     // Check if already enabled
     db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
         if (row && row.value === 'true') {
             if (req.cookies.admin_token !== 'AUTHENTICATED') {
-                return res.status(403).json({ error: "2FA already enabled" });
+                return res.status(403).json({ error: "System already secured" });
             }
         }
 
-        const secret = speakeasy.generateSecret({ name: "GPS Tracker Admin" });
-        db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_secret', ?)", [secret.base32]);
+        // 1. Hash Password
+        const salt = crypto.randomBytes(16).toString('hex');
+        const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+
+        // 2. Generate 2FA Secret
+        const secret = speakeasy.generateSecret({ name: `GPS Tracker (${email})` });
+
+        // 3. Save Everything
+        db.serialize(() => {
+            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_email', ?)", [email]);
+            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_salt', ?)", [salt]);
+            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)", [hash]);
+            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_secret', ?)", [secret.base32]);
+        });
 
         QRCode.toDataURL(secret.otpauth_url, (err, data_url) => {
             res.json({ secret: secret.base32, qr_code: data_url });
@@ -94,28 +111,51 @@ app.post('/api/auth/setup', (req, res) => {
 
 // Verify 2FA & Login
 app.post('/api/auth/verify', (req, res) => {
-    const { token } = req.body;
+    const { email, password, token } = req.body;
 
-    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_secret'", (err, row) => {
-        if (!row) return res.status(400).json({ error: "2FA not set up" });
+    // Fetch settings
+    db.all("SELECT key, value FROM settings WHERE key IN ('admin_email', 'admin_salt', 'admin_password', 'admin_2fa_secret', 'admin_2fa_enabled')", (err, rows) => {
+        if (err || !rows) return res.status(500).json({ error: "Database error" });
 
-        const dbSecret = row.value;
+        const settings = {};
+        rows.forEach(r => settings[r.key] = r.value);
+
+        if (!settings.admin_2fa_secret) return res.status(400).json({ error: "Security not set up" });
+
+        // 1. Verify Email
+        if (settings.admin_email && settings.admin_email !== email) {
+            return res.status(401).json({ error: "Invalid Email" });
+        }
+
+        // 2. Verify Password
+        if (settings.admin_password && settings.admin_salt) {
+            const hash = crypto.pbkdf2Sync(password, settings.admin_salt, 1000, 64, 'sha512').toString('hex');
+            if (hash !== settings.admin_password) {
+                return res.status(401).json({ error: "Invalid Password" });
+            }
+        }
+
+        // 3. Verify TOTP
         const verified = speakeasy.totp.verify({
-            secret: dbSecret,
+            secret: settings.admin_2fa_secret,
             encoding: 'base32',
             token: token,
             window: 1 // Allow 30s drift
         });
 
         if (verified) {
-            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_enabled', 'true')");
+            // Mark as enabled on first successful login if not already
+            if (settings.admin_2fa_enabled !== 'true') {
+                db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_enabled', 'true')");
+            }
+
             res.cookie('admin_token', 'AUTHENTICATED', {
                 httpOnly: true,
                 maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
             });
             res.json({ success: true });
         } else {
-            res.status(401).json({ error: "Invalid code" });
+            res.status(401).json({ error: "Invalid 2FA Code" });
         }
     });
 });
