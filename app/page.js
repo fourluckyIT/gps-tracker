@@ -23,21 +23,54 @@ export default function Dashboard() {
     const [credentials, setCredentials] = useState({});
     const [generatingCode, setGeneratingCode] = useState(null);
 
-    // Fetch initial devices
+    // 2FA State
+    const [authStatus, setAuthStatus] = useState('loading'); // loading, authenticated, unauthenticated, setup_required
+    const [authData, setAuthData] = useState({ secret: '', qr_code: '' });
+    const [totpCode, setTotpCode] = useState('');
+    const [authError, setAuthError] = useState('');
+
+    // Check Auth Status on Load
     useEffect(() => {
+        const checkAuth = async () => {
+            try {
+                const res = await fetch(`${SERVER_URL}/api/auth/status`);
+                const data = await res.json();
+                if (data.authenticated) {
+                    setAuthStatus('authenticated');
+                } else if (!data.enabled) {
+                    // Fetch Setup Data if 2FA not enabled
+                    const setupRes = await fetch(`${SERVER_URL}/api/auth/setup`, { method: 'POST' });
+                    const setupData = await setupRes.json();
+                    setAuthData(setupData);
+                    setAuthStatus('setup_required');
+                } else {
+                    setAuthStatus('unauthenticated');
+                }
+            } catch (err) {
+                console.error("Auth check failed", err);
+                setAuthStatus('error');
+            }
+        };
+        checkAuth();
+    }, []);
+
+    // Fetch initial devices (Only if authenticated - handled by conditionals later, but fetch will fail/auth error if not)
+    useEffect(() => {
+        if (authStatus !== 'authenticated') return;
         fetch(`${SERVER_URL}/api/devices`)
             .then(res => res.json())
             .then(data => setDevices(data || []))
             .catch(err => console.error("Fetch error:", err));
-    }, []);
+    }, [authStatus]);
 
     // WebSocket for real-time updates
     useEffect(() => {
+        if (authStatus !== 'authenticated') return;
         const socket = io(SERVER_URL, { transports: ["websocket"] });
 
         socket.on("connect", () => setConnected(true));
         socket.on("disconnect", () => setConnected(false));
-
+        // ... rest of socket logic
         socket.on("device_update", (data) => {
             setDevices(prev => {
                 const exists = prev.find(d => d.device_id === data.device_id);
@@ -53,12 +86,12 @@ export default function Dashboard() {
         });
 
         socket.on("clear_data", () => setDevices([]));
-
         return () => socket.disconnect();
-    }, []);
+    }, [authStatus]);
 
     // Fetch credentials on load
     useEffect(() => {
+        if (authStatus !== 'authenticated') return;
         fetch(`${SERVER_URL}/api/admin/credentials`)
             .then(res => res.json())
             .then(data => {
@@ -67,7 +100,7 @@ export default function Dashboard() {
                 setCredentials(map);
             })
             .catch(console.error);
-    }, []);
+    }, [authStatus]);
 
     // Generate credential for device
     const generateCredential = async (deviceId) => {
@@ -107,7 +140,90 @@ export default function Dashboard() {
             });
     };
 
+    // Verify 2FA
+    const handleVerify = async () => {
+        setAuthError('');
+        try {
+            const res = await fetch(`${SERVER_URL}/api/auth/verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: totpCode, secret: authData.secret }) // Send secret only if setup
+            });
+            const data = await res.json();
+            if (data.success) {
+                setAuthStatus('authenticated');
+            } else {
+                setAuthError('รหัสไม่ถูกต้อง กรุณาลองใหม่');
+            }
+        } catch (err) {
+            setAuthError('เกิดข้อผิดพลาดในการเชื่อมต่อ');
+        }
+    };
+
     const getStatusConfig = (status) => STATUS_CONFIG[status] || STATUS_CONFIG['UNKNOWN'];
+
+    // --- AUTH UI RENDERING ---
+    if (authStatus === 'loading') return <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
+
+    if (authStatus === 'setup_required') {
+        return (
+            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '400px' }}>
+                    <h1 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>🔐 ตั้งค่าความปลอดภัย 2FA</h1>
+                    <p style={{ color: '#aaa', marginBottom: '20px' }}>สแกน QR Code ด้วย Google Authenticator</p>
+
+                    {authData.qr_code && <img src={authData.qr_code} alt="QR Code" style={{ borderRadius: '8px', marginBottom: '20px', display: 'block', marginLeft: 'auto', marginRight: 'auto' }} />}
+
+                    <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: '20px', wordBreak: 'break-all' }}>Secret: {authData.secret}</p>
+
+                    <input
+                        type="text"
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value)}
+                        placeholder="กรอกรหัส 6 หลัก"
+                        style={{ width: '100%', padding: '12px', background: '#222', border: '1px solid #444', color: 'white', borderRadius: '8px', fontSize: '1.2rem', textAlign: 'center', marginBottom: '10px' }}
+                    />
+
+                    {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
+
+                    <button
+                        onClick={handleVerify}
+                        style={{ width: '100%', padding: '12px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' }}
+                    >
+                        ยืนยันและเปิดใช้งาน
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    if (authStatus === 'unauthenticated') {
+        return (
+            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '350px', width: '100%' }}>
+                    <h1 style={{ fontSize: '1.5rem', marginBottom: '20px' }}>🔐 เข้าสู่ระบบ</h1>
+
+                    <input
+                        type="text"
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value)}
+                        placeholder="รหัส 2FA 6 หลัก"
+                        style={{ width: '100%', padding: '12px', background: '#222', border: '1px solid #444', color: 'white', borderRadius: '8px', fontSize: '1.2rem', textAlign: 'center', marginBottom: '20px' }}
+                        onKeyDown={(e) => e.key === 'Enter' && handleVerify()}
+                    />
+
+                    {authError && <p style={{ color: '#EF4444', marginBottom: '20px' }}>{authError}</p>}
+
+                    <button
+                        onClick={handleVerify}
+                        style={{ width: '100%', padding: '12px', background: '#22C55E', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' }}
+                    >
+                        เข้าสู่ระบบ
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', fontFamily: 'system-ui, sans-serif' }}>
