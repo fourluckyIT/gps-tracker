@@ -407,7 +407,17 @@ export default function Dashboard() {
                                     <div key={log.id || idx} style={{ padding: '10px 12px', background: '#1a1a1a', borderRadius: '8px', marginBottom: '8px', fontSize: '0.85rem' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                                             <span style={{ color: getStatusConfig(log.status).color, fontWeight: 'bold' }}>{getStatusConfig(log.status).label}</span>
-                                            <span style={{ color: '#666' }}>{new Date(log.timestamp).toLocaleString('th-TH')}</span>
+                                            <span style={{ color: '#666' }}>
+                                                {new Date(log.timestamp).toLocaleString('th-TH', {
+                                                    timeZone: 'Asia/Bangkok',
+                                                    day: '2-digit',
+                                                    month: '2-digit',
+                                                    year: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit',
+                                                    second: '2-digit'
+                                                })}
+                                            </span>
                                         </div>
                                         <div style={{ color: '#aaa' }}>📍 {log.lat?.toFixed(5)}, {log.lng?.toFixed(5)}</div>
                                     </div>

@@ -243,12 +243,13 @@ db.serialize(() => {
 
 // ========== DATA PARSER ==========
 // Format: "MAC,STATUS LAT, LNG, TIMESTAMP"
-// Example: "AA:BB:CC:DD:EE:FF,1 14.356857, 100.610772, 12345"
+// Example: "AA:BB:CC:DD:EE:FF,1 14.356857, 100.610772, 1234567890"
 function parseMessage(content) {
     let deviceId = "unknown";
     let lat = null;
     let lng = null;
     let status = "0";
+    let timestamp = null;
     let rawContent = typeof content === 'string' ? content.trim() : JSON.stringify(content);
 
     if (typeof content === 'string') {
@@ -262,6 +263,7 @@ function parseMessage(content) {
                 lat = parseFloat(json.lat || json.latitude) || null;
                 lng = parseFloat(json.lng || json.longitude) || null;
                 status = String(json.status || json.type || "0");
+                timestamp = json.timestamp ? new Date(json.timestamp * 1000) : null;
             } catch (e) { }
         } else {
             // Parse: "MAC,STATUS LAT, LNG, TIMESTAMP"
@@ -272,6 +274,14 @@ function parseMessage(content) {
                 status = parts[1];   // Status code
                 lat = parseFloat(parts[2]) || null;
                 lng = parseFloat(parts[3]) || null;
+
+                // TIMESTAMP (parts[4]) is Unix Timestamp in SECONDS
+                if (parts.length >= 5) {
+                    const ts = parseInt(parts[4]);
+                    if (!isNaN(ts) && ts > 0) {
+                        timestamp = new Date(ts * 1000); // Convert to MS
+                    }
+                }
             }
         }
     }
@@ -285,30 +295,33 @@ function parseMessage(content) {
     };
     const statusLabel = statusMap[status] || status;
 
-    return { deviceId, lat, lng, status: statusLabel, rawContent };
+    return { deviceId, lat, lng, status: statusLabel, rawContent, timestamp };
 }
 
 // ========== HANDLE INCOMING DATA ==========
 function handleData(data) {
-    const { deviceId, lat, lng, status, rawContent } = data;
+    const { deviceId, lat, lng, status, rawContent, timestamp } = data;
+
+    // Use device timestamp if available, otherwise server time
+    const eventTime = timestamp ? timestamp.toISOString() : new Date().toISOString();
 
     // Save to logs (history)
-    db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data) VALUES (?, ?, ?, ?, ?)`,
-        [deviceId, lat || 0, lng || 0, status, rawContent]);
+    db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+        [deviceId, lat || 0, lng || 0, status, rawContent, eventTime]);
 
     // Upsert to devices (latest only)
     db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(device_id)
-            DO UPDATE SET lat=excluded.lat, lng=excluded.lng, status=excluded.status, last_update=CURRENT_TIMESTAMP`,
-        [deviceId, lat || 0, lng || 0, status]);
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(device_id)
+                DO UPDATE SET lat=excluded.lat, lng=excluded.lng, status=excluded.status, last_update=excluded.last_update`,
+        [deviceId, lat || 0, lng || 0, status, eventTime]);
 
     // Emit to all connected clients
     io.emit('device_update', {
         device_id: deviceId,
         lat, lng, status,
         raw: rawContent,
-        last_update: new Date().toISOString()
+        last_update: eventTime
     });
 
     // 🛡️ CHECK GEOFENCES
