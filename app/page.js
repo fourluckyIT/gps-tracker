@@ -29,6 +29,10 @@ export default function Dashboard() {
     const [totpCode, setTotpCode] = useState('');
     const [authError, setAuthError] = useState('');
 
+    // New: Email/Password State
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+
     // Check Auth Status on Load
     useEffect(() => {
         const checkAuth = async () => {
@@ -38,10 +42,6 @@ export default function Dashboard() {
                 if (data.authenticated) {
                     setAuthStatus('authenticated');
                 } else if (!data.enabled) {
-                    // Fetch Setup Data if 2FA not enabled
-                    const setupRes = await fetch(`${SERVER_URL}/api/auth/setup`, { method: 'POST' });
-                    const setupData = await setupRes.json();
-                    setAuthData(setupData);
                     setAuthStatus('setup_required');
                 } else {
                     setAuthStatus('unauthenticated');
@@ -140,20 +140,49 @@ export default function Dashboard() {
             });
     };
 
-    // Verify 2FA
+    // Setup 2FA (First Time)
+    const handleSetup = async () => {
+        if (!email || !password) {
+            setAuthError('กรุณากรอก Email และรหัสผ่าน');
+            return;
+        }
+        try {
+            const res = await fetch(`${SERVER_URL}/api/auth/setup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            const data = await res.json();
+            if (data.qr_code) {
+                setAuthData(data); // Show QR
+                setAuthError('');
+            } else {
+                setAuthError(data.error || 'เกิดข้อผิดพลาด');
+            }
+        } catch (err) {
+            setAuthError('เชื่อมต่อ Server ไม่ได้');
+        }
+    };
+
+    // Verify 2FA & Login
     const handleVerify = async () => {
         setAuthError('');
         try {
+            // For Setup flow, we just need to verify the code matches the secret generated (implementation usually requires saving first, but here we verified in backend)
+            // Actually, in our server.js, /api/auth/verify checks against DB. 
+            // So for Setup Flow: User scans QR -> enters code -> we call verify.
+
             const res = await fetch(`${SERVER_URL}/api/auth/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token: totpCode, secret: authData.secret }) // Send secret only if setup
+                body: JSON.stringify({ email, password, token: totpCode })
             });
             const data = await res.json();
             if (data.success) {
                 setAuthStatus('authenticated');
+                window.location.reload();
             } else {
-                setAuthError('รหัสไม่ถูกต้อง กรุณาลองใหม่');
+                setAuthError(data.error || 'รหัสไม่ถูกต้อง');
             }
         } catch (err) {
             setAuthError('เกิดข้อผิดพลาดในการเชื่อมต่อ');
@@ -168,30 +197,38 @@ export default function Dashboard() {
     if (authStatus === 'setup_required') {
         return (
             <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '400px' }}>
-                    <h1 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>🔐 ตั้งค่าความปลอดภัย 2FA</h1>
-                    <p style={{ color: '#aaa', marginBottom: '20px' }}>สแกน QR Code ด้วย Google Authenticator</p>
+                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '400px', width: '90%' }}>
+                    <h1 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>🔐 ตั้งค่า Admin (ครั้งแรก)</h1>
+                    <p style={{ color: '#aaa', marginBottom: '20px' }}>กรุณาตั้ง Email และรหัสผ่านสำหรับผู้ดูแลระบบ</p>
 
-                    {authData.qr_code && <img src={authData.qr_code} alt="QR Code" style={{ borderRadius: '8px', marginBottom: '20px', display: 'block', marginLeft: 'auto', marginRight: 'auto' }} />}
+                    {!authData.qr_code ? (
+                        /* Step 1: Input Email/Pass */
+                        <>
+                            <input
+                                type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (admin@example.com)"
+                                style={inputStyle}
+                            />
+                            <input
+                                type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="ตั้งรหัสผ่าน"
+                                style={inputStyle}
+                            />
+                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
+                            <button onClick={handleSetup} style={btnStyle}>ถัดไป: สร้าง 2FA</button>
+                        </>
+                    ) : (
+                        /* Step 2: Show QR & Verify */
+                        <>
+                            <img src={authData.qr_code} alt="QR Code" style={{ borderRadius: '8px', marginBottom: '20px', display: 'block', marginLeft: 'auto', marginRight: 'auto' }} />
+                            <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: '20px' }}>ใช้แอป Authenticator สแกน</p>
 
-                    <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: '20px', wordBreak: 'break-all' }}>Secret: {authData.secret}</p>
-
-                    <input
-                        type="text"
-                        value={totpCode}
-                        onChange={(e) => setTotpCode(e.target.value)}
-                        placeholder="กรอกรหัส 6 หลัก"
-                        style={{ width: '100%', padding: '12px', background: '#222', border: '1px solid #444', color: 'white', borderRadius: '8px', fontSize: '1.2rem', textAlign: 'center', marginBottom: '10px' }}
-                    />
-
-                    {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
-
-                    <button
-                        onClick={handleVerify}
-                        style={{ width: '100%', padding: '12px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' }}
-                    >
-                        ยืนยันและเปิดใช้งาน
-                    </button>
+                            <input
+                                type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="code 6 หลัก"
+                                style={{ ...inputStyle, textAlign: 'center', fontSize: '1.2rem', letterSpacing: '4px' }}
+                            />
+                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
+                            <button onClick={handleVerify} style={{ ...btnStyle, background: '#22C55E' }}>ยืนยันและเริ่มใช้งาน</button>
+                        </>
+                    )}
                 </div>
             </div>
         );
@@ -200,30 +237,34 @@ export default function Dashboard() {
     if (authStatus === 'unauthenticated') {
         return (
             <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '350px', width: '100%' }}>
+                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '350px', width: '90%' }}>
                     <h1 style={{ fontSize: '1.5rem', marginBottom: '20px' }}>🔐 เข้าสู่ระบบ</h1>
 
                     <input
-                        type="text"
-                        value={totpCode}
-                        onChange={(e) => setTotpCode(e.target.value)}
-                        placeholder="รหัส 2FA 6 หลัก"
-                        style={{ width: '100%', padding: '12px', background: '#222', border: '1px solid #444', color: 'white', borderRadius: '8px', fontSize: '1.2rem', textAlign: 'center', marginBottom: '20px' }}
+                        type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email"
+                        style={inputStyle}
+                    />
+                    <input
+                        type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="รหัสผ่าน"
+                        style={inputStyle}
+                    />
+                    <input
+                        type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="Code 6 หลัก (2FA)"
+                        style={{ ...inputStyle, textAlign: 'center', marginBottom: '20px' }}
                         onKeyDown={(e) => e.key === 'Enter' && handleVerify()}
                     />
 
                     {authError && <p style={{ color: '#EF4444', marginBottom: '20px' }}>{authError}</p>}
 
-                    <button
-                        onClick={handleVerify}
-                        style={{ width: '100%', padding: '12px', background: '#22C55E', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' }}
-                    >
-                        เข้าสู่ระบบ
-                    </button>
+                    <button onClick={handleVerify} style={{ ...btnStyle, background: '#3B82F6' }}>เข้าสู่ระบบ</button>
                 </div>
             </div>
         );
     }
+
+    // Helper styles
+    const inputStyle = { width: '100%', padding: '12px', background: '#222', border: '1px solid #444', color: 'white', borderRadius: '8px', marginBottom: '12px', boxSizing: 'border-box' };
+    const btnStyle = { width: '100%', padding: '12px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' };
 
     return (
         <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', fontFamily: 'system-ui, sans-serif' }}>
