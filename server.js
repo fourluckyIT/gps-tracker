@@ -231,7 +231,8 @@ nextApp.prepare().then(() => {
 
     // 📡 Receive data from ESP32
     app.post('/api/track', (req, res) => {
-        console.log("📥 HTTP Recv:", req.body);
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        console.log(`📥 HTTP Recv from ${clientIp}:`, req.body);
         const parsed = parseMessage(req.body);
         handleData(parsed);
         res.send('OK');
