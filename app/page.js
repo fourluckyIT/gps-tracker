@@ -336,7 +336,15 @@ export default function Dashboard() {
                                                     {device.lat?.toFixed(5)}, {device.lng?.toFixed(5)}
                                                 </td>
                                                 <td style={{ padding: '14px 16px', fontSize: '0.85rem', color: '#888' }}>
-                                                    {device.last_update ? new Date(device.last_update).toLocaleString('th-TH') : '-'}
+                                                    {device.last_update ? new Date(device.last_update).toLocaleString('th-TH', {
+                                                        timeZone: 'Asia/Bangkok',
+                                                        day: '2-digit',
+                                                        month: '2-digit',
+                                                        year: 'numeric',
+                                                        hour: '2-digit',
+                                                        minute: '2-digit',
+                                                        second: '2-digit'
+                                                    }) : '-'}
                                                 </td>
                                                 <td style={{ padding: '14px 16px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                                                     {cred ? (
