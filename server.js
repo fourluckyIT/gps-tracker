@@ -305,24 +305,53 @@ function handleData(data) {
     // Use device timestamp if available, otherwise server time
     const eventTime = timestamp ? timestamp.toISOString() : new Date().toISOString();
 
-    // Save to logs (history)
+    // Save to logs (history) - KEEP EVERYTHING
     db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
         [deviceId, lat || 0, lng || 0, status, rawContent, eventTime]);
 
-    // Upsert to devices (latest only)
-    db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(device_id)
-                DO UPDATE SET lat=excluded.lat, lng=excluded.lng, status=excluded.status, last_update=excluded.last_update`,
-        [deviceId, lat || 0, lng || 0, status, eventTime]);
+    // Check if GPS is valid (not 0.0)
+    // Use a threshold because float 0.0 might be 0.000000001
+    const isValidGPS = (Math.abs(lat) > 0.0001 && Math.abs(lng) > 0.0001);
 
-    // Emit to all connected clients
-    io.emit('device_update', {
-        device_id: deviceId,
-        lat, lng, status,
-        raw: rawContent,
-        last_update: eventTime
-    });
+    if (isValidGPS) {
+        // Update EVERYTHING including position
+        db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(device_id)
+                    DO UPDATE SET lat=excluded.lat, lng=excluded.lng, status=excluded.status, last_update=excluded.last_update`,
+            [deviceId, lat, lng, status, eventTime]);
+
+        // Emit new data
+        io.emit('device_update', {
+            device_id: deviceId,
+            lat, lng, status,
+            raw: rawContent,
+            last_update: eventTime
+        });
+    } else {
+        // Invalid GPS: Update only Status & Time, KEEP OLD LAT/LNG
+        // We need to fetch old lat/lng to emit via socket correctly (so map doesn't jump to 0)
+        db.get("SELECT lat, lng FROM devices WHERE device_id = ?", [deviceId], (err, row) => {
+            const currentLat = row ? row.lat : 0;
+            const currentLng = row ? row.lng : 0;
+
+            db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(device_id)
+                        DO UPDATE SET status=excluded.status, last_update=excluded.last_update`,
+                [deviceId, currentLat, currentLng, status, eventTime]);
+
+            // Emit with OLD coordinates (so map stays put)
+            io.emit('device_update', {
+                device_id: deviceId,
+                lat: currentLat, // Send old valid coord
+                lng: currentLng,
+                status,
+                raw: rawContent,
+                last_update: eventTime
+            });
+        });
+    }
 
     // 🛡️ CHECK GEOFENCES
     checkGeofences(deviceId, lat, lng);
