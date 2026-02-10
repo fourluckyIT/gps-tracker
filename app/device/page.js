@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
 
-export default function DeviceRedirect() {
+function RedirectLogic() {
     const router = useRouter();
     const searchParams = useSearchParams();
 
@@ -30,5 +30,13 @@ export default function DeviceRedirect() {
         }}>
             <p>Redirecting to map...</p>
         </div>
+    );
+}
+
+export default function DeviceRedirect() {
+    return (
+        <Suspense fallback={<div>Loading...</div>}>
+            <RedirectLogic />
+        </Suspense>
     );
 }
