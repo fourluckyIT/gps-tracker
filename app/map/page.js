@@ -81,6 +81,30 @@ function MapContent() {
     const [sosNumbers, setSosNumbers] = useState(["", "", ""]);
     const [sosLoading, setSosLoading] = useState(false);
 
+    // History Log State
+    const [historyOpen, setHistoryOpen] = useState(false);
+    const [logs, setLogs] = useState([]);
+    const [logsLoading, setLogsLoading] = useState(false);
+
+    const fetchHistoryLogs = () => {
+        if (!deviceId) return;
+        setLogsLoading(true);
+        setHistoryOpen(true);
+        setMenuOpen(false); // Close menu if open
+
+        fetch(`${SERVER_URL}/api/history/${deviceId}?limit=20`)
+            .then(res => res.json())
+            .then(data => {
+                setLogs(data);
+                setLogsLoading(false);
+            })
+            .catch(err => {
+                console.error(err);
+                setLogsLoading(false);
+                toast.error("โหลดประวัติไม่สำเร็จ");
+            });
+    };
+
     // Address state (Moved to top)
     const [address, setAddress] = useState("กำลังค้นหาที่อยู่...");
 
@@ -682,28 +706,26 @@ function MapContent() {
                         </button>
                     </div>
 
-                    {/* History Link */}
-                    <h3><Clock size={18} /> ประวัติย้อนหลัง</h3>
+                    <h3><Clock size={18} /> ประวัติการจอด</h3>
                     <div className="status-card" style={{ background: '#222', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
-                        <Link href={`/device?id=${deviceId || 'unknown'}`} style={{ textDecoration: 'none' }}>
-                            <button
-                                style={{
-                                    width: '100%',
-                                    padding: '10px',
-                                    background: '#333',
-                                    border: '1px solid #444',
-                                    borderRadius: '4px',
-                                    color: '#fff',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px'
-                                }}
-                            >
-                                📜 ดูประวัติการแจ้งเตือน
-                            </button>
-                        </Link>
+                        <button
+                            onClick={fetchHistoryLogs}
+                            style={{
+                                width: '100%',
+                                padding: '10px',
+                                background: '#333',
+                                border: '1px solid #444',
+                                borderRadius: '4px',
+                                color: '#fff',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '8px'
+                            }}
+                        >
+                            📜 ดูประวัติการจอด
+                        </button>
                     </div>
 
 
@@ -845,82 +867,134 @@ function MapContent() {
                                     {GEOFENCE_NAMES[popupIndex]}
                                 </h3>
                                 <button onClick={() => setPopupOpen(false)}>
-                                    <X size={24} />
-                                </button>
                             </div>
-
-                            <div className="popup-map">
-                                <GoogleMap
-                                    mapContainerStyle={{ width: "100%", height: "100%" }}
-                                    center={popupPosition}
-                                    zoom={16}
-                                    options={{
-                                        disableDefaultUI: true,
-                                        zoomControl: true,
-                                    }}
-                                    onLoad={onPopupMapLoad}
-                                    onClick={(e) => {
-                                        setPopupPosition({
-                                            lat: e.latLng.lat(),
-                                            lng: e.latLng.lng(),
-                                        });
-                                    }}
-                                >
-                                    <Marker
-                                        position={popupPosition}
-                                        draggable={true}
-                                        onDragEnd={(e) => {
-                                            setPopupPosition({
-                                                lat: e.latLng.lat(),
-                                                lng: e.latLng.lng(),
-                                            });
-                                        }}
-                                        icon={{
-                                            url: "data:image/svg+xml," + encodeURIComponent(`
-                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 50" width="40" height="50">
-                                                <path d="M20 0 C8.954 0 0 8.954 0 20 C0 35 20 50 20 50 C20 50 40 35 40 20 C40 8.954 31.046 0 20 0 Z" fill="${GEOFENCE_COLORS[popupIndex]}"/>
-                                                <circle cx="20" cy="20" r="8" fill="white"/>
-                                            </svg>
-                                        `),
-                                            scaledSize: { width: 40, height: 50 },
-                                            anchor: { x: 20, y: 50 },
-                                        }}
-                                    />
-                                    <Circle
-                                        center={popupPosition}
-                                        radius={popupRadius}
-                                        options={{
-                                            fillColor: GEOFENCE_COLORS[popupIndex],
-                                            fillOpacity: 0.3,
-                                            strokeColor: GEOFENCE_COLORS[popupIndex],
-                                            strokeOpacity: 1,
-                                            strokeWeight: 2,
-                                        }}
-                                    />
-                                </GoogleMap>
-                            </div>
-
-                            <div className="popup-controls">
-                                <label>รัศมี: {popupRadius} เมตร</label>
-                                <input
-                                    type="range"
-                                    min="30"
-                                    max="500"
-                                    step="10"
-                                    value={popupRadius}
-                                    onChange={(e) => setPopupRadius(parseInt(e.target.value))}
-                                />
-                            </div>
-
-                            <button className="save-btn" onClick={saveGeofence}>
-                                <Check size={20} /> บันทึก
-                            </button>
                         </div>
                     </>
                 )
             }
 
-            <style jsx>{`
+            {/* History Modal */}
+            {
+                historyOpen && (
+                    <>
+                        <div className="overlay" onClick={() => setHistoryOpen(false)} />
+                        <div className="popup" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+                            <div className="popup-header">
+                                <h3>📜 ประวัติการจอด (ล่าสุด)</h3>
+                                <button onClick={() => setHistoryOpen(false)}>
+                                    <X size={24} />
+                                </button>
+                            </div>
+                            <div className="popup-content">
+                                {logsLoading ? (
+                                    <p style={{ textAlign: 'center', padding: '20px' }}>กำลังโหลด...</p>
+                                ) : logs.length === 0 ? (
+                                    <p style={{ textAlign: 'center', padding: '20px', color: '#888' }}>ไม่มีข้อมูลประวัติ</p>
+                                ) : (
+                                    <ul style={{ listStyle: 'none', padding: 0 }}>
+                                        {logs.map((log, i) => (
+                                            <li key={i} style={{ borderBottom: '1px solid #333', padding: '10px 0', fontSize: '0.9rem' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                    <span style={{ color: '#aaa' }}>
+                                                        {new Date(log.timestamp).toLocaleString('th-TH', {
+                                                            timeZone: 'Asia/Bangkok',
+                                                            day: '2-digit', month: '2-digit', year: 'numeric',
+                                                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                                                        })}
+                                                    </span>
+                                                    <span style={{
+                                                        fontWeight: 'bold',
+                                                        color: log.status.includes('STOLEN') ? '#ff6b6b' :
+                                                            log.status.includes('CRASH') ? '#ff9f43' : '#4ecdc4'
+                                                    }}>
+                                                        {log.status}
+                                                    </span>
+                                                </div>
+                                                <div style={{ color: '#666', fontSize: '0.8rem' }}>
+                                                    พิกัด: {Number(log.lat).toFixed(5)}, {Number(log.lng).toFixed(5)}
+                                                </div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+                    </>
+                )
+            }
+
+            <div className="popup-map">
+                <GoogleMap
+                    mapContainerStyle={{ width: "100%", height: "100%" }}
+                    center={popupPosition}
+                    zoom={16}
+                    options={{
+                        disableDefaultUI: true,
+                        zoomControl: true,
+                    }}
+                    onLoad={onPopupMapLoad}
+                    onClick={(e) => {
+                        setPopupPosition({
+                            lat: e.latLng.lat(),
+                            lng: e.latLng.lng(),
+                        });
+                    }}
+                >
+                    <Marker
+                        position={popupPosition}
+                        draggable={true}
+                        onDragEnd={(e) => {
+                            setPopupPosition({
+                                lat: e.latLng.lat(),
+                                lng: e.latLng.lng(),
+                            });
+                        }}
+                        icon={{
+                            url: "data:image/svg+xml," + encodeURIComponent(`
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 50" width="40" height="50">
+                                                <path d="M20 0 C8.954 0 0 8.954 0 20 C0 35 20 50 20 50 C20 50 40 35 40 20 C40 8.954 31.046 0 20 0 Z" fill="${GEOFENCE_COLORS[popupIndex]}"/>
+                                                <circle cx="20" cy="20" r="8" fill="white"/>
+                                            </svg>
+                                        `),
+                            scaledSize: { width: 40, height: 50 },
+                            anchor: { x: 20, y: 50 },
+                        }}
+                    />
+                    <Circle
+                        center={popupPosition}
+                        radius={popupRadius}
+                        options={{
+                            fillColor: GEOFENCE_COLORS[popupIndex],
+                            fillOpacity: 0.3,
+                            strokeColor: GEOFENCE_COLORS[popupIndex],
+                            strokeOpacity: 1,
+                            strokeWeight: 2,
+                        }}
+                    />
+                </GoogleMap>
+            </div>
+
+            <div className="popup-controls">
+                <label>รัศมี: {popupRadius} เมตร</label>
+                <input
+                    type="range"
+                    min="30"
+                    max="500"
+                    step="10"
+                    value={popupRadius}
+                    onChange={(e) => setPopupRadius(parseInt(e.target.value))}
+                />
+            </div>
+
+            <button className="save-btn" onClick={saveGeofence}>
+                <Check size={20} /> บันทึก
+            </button>
+        </div>
+                    </>
+                )
+}
+
+<style jsx>{`
                 .app-container {
                     display: flex;
                     flex-direction: column;
