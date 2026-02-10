@@ -938,62 +938,62 @@ function MapContent() {
                                 <Check size={20} /> บันทึก
                             </button>
                         </div>
-                    </div >
-        </>
-    )
-}
 
-{/* History Modal */ }
-{
-    historyOpen && (
-        <>
-            <div className="overlay" onClick={() => setHistoryOpen(false)} />
-            <div className="popup" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
-                <div className="popup-header">
-                    <h3>📜 ประวัติการจอด (ล่าสุด)</h3>
-                    <button onClick={() => setHistoryOpen(false)}>
-                        <X size={24} />
-                    </button>
-                </div>
-                <div className="popup-content">
-                    {logsLoading ? (
-                        <p style={{ textAlign: 'center', padding: '20px' }}>กำลังโหลด...</p>
-                    ) : logs.length === 0 ? (
-                        <p style={{ textAlign: 'center', padding: '20px', color: '#888' }}>ไม่มีข้อมูลประวัติ</p>
-                    ) : (
-                        <ul style={{ listStyle: 'none', padding: 0 }}>
-                            {logs.map((log, i) => (
-                                <li key={i} style={{ borderBottom: '1px solid #333', padding: '10px 0', fontSize: '0.9rem' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                        <span style={{ color: '#aaa' }}>
-                                            {new Date(log.timestamp).toLocaleString('th-TH', {
-                                                timeZone: 'Asia/Bangkok',
-                                                day: '2-digit', month: '2-digit', year: 'numeric',
-                                                hour: '2-digit', minute: '2-digit', second: '2-digit'
-                                            })}
-                                        </span>
-                                        <span style={{
-                                            fontWeight: 'bold',
-                                            color: log.status.includes('STOLEN') ? '#ff6b6b' :
-                                                log.status.includes('CRASH') ? '#ff9f43' : '#4ecdc4'
-                                        }}>
-                                            {log.status}
-                                        </span>
-                                    </div>
-                                    <div style={{ color: '#666', fontSize: '0.8rem' }}>
-                                        พิกัด: {Number(log.lat).toFixed(5)}, {Number(log.lng).toFixed(5)}
-                                    </div>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-            </div>
-        </>
-    )
-}
+                    </>
+                )
+            }
 
-<style jsx>{`
+            {/* History Modal */}
+            {
+                historyOpen && (
+                    <>
+                        <div className="overlay" onClick={() => setHistoryOpen(false)} />
+                        <div className="popup" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+                            <div className="popup-header">
+                                <h3>📜 ประวัติการจอด (ล่าสุด)</h3>
+                                <button onClick={() => setHistoryOpen(false)}>
+                                    <X size={24} />
+                                </button>
+                            </div>
+                            <div className="popup-content">
+                                {logsLoading ? (
+                                    <p style={{ textAlign: 'center', padding: '20px' }}>กำลังโหลด...</p>
+                                ) : logs.length === 0 ? (
+                                    <p style={{ textAlign: 'center', padding: '20px', color: '#888' }}>ไม่มีข้อมูลประวัติ</p>
+                                ) : (
+                                    <ul style={{ listStyle: 'none', padding: 0 }}>
+                                        {logs.map((log, i) => (
+                                            <li key={i} style={{ borderBottom: '1px solid #333', padding: '10px 0', fontSize: '0.9rem' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                    <span style={{ color: '#aaa' }}>
+                                                        {new Date(log.timestamp).toLocaleString('th-TH', {
+                                                            timeZone: 'Asia/Bangkok',
+                                                            day: '2-digit', month: '2-digit', year: 'numeric',
+                                                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                                                        })}
+                                                    </span>
+                                                    <span style={{
+                                                        fontWeight: 'bold',
+                                                        color: log.status.includes('STOLEN') ? '#ff6b6b' :
+                                                            log.status.includes('CRASH') ? '#ff9f43' : '#4ecdc4'
+                                                    }}>
+                                                        {log.status}
+                                                    </span>
+                                                </div>
+                                                <div style={{ color: '#666', fontSize: '0.8rem' }}>
+                                                    พิกัด: {Number(log.lat).toFixed(5)}, {Number(log.lng).toFixed(5)}
+                                                </div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+                    </>
+                )
+            }
+
+            <style jsx>{`
                 .app-container {
                     display: flex;
                     flex-direction: column;
