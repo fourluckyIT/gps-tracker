@@ -85,14 +85,17 @@ function MapContent() {
     const [historyOpen, setHistoryOpen] = useState(false);
     const [logs, setLogs] = useState([]);
     const [logsLoading, setLogsLoading] = useState(false);
+    const [showAlertsOnly, setShowAlertsOnly] = useState(false);
 
     const fetchHistoryLogs = () => {
         if (!deviceId) return;
         setLogsLoading(true);
         setHistoryOpen(true);
+        setHistoryOpen(true);
         setMenuOpen(false); // Close menu if open
+        setShowAlertsOnly(false); // Reset filter
 
-        fetch(`${SERVER_URL}/api/history/${deviceId}?limit=20`)
+        fetch(`${SERVER_URL}/api/history/${deviceId}?limit=50`)
             .then(res => res.json())
             .then(data => {
                 setLogs(data);
@@ -652,6 +655,28 @@ function MapContent() {
                     >
                         <Crosshair size={18} /> โฟกัสตำแหน่งรถ
                     </button>
+
+                    {/* History Button (New) */}
+                    <button
+                        onClick={fetchHistoryLogs}
+                        style={{
+                            marginTop: '0px',
+                            width: '100%',
+                            padding: '10px',
+                            background: '#333',
+                            border: '1px solid #444',
+                            borderRadius: '8px',
+                            color: '#fff',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '5px'
+                        }}
+                    >
+                        <Clock size={18} /> ดูประวัติ / แจ้งเตือน
+                    </button>
                 </div>
             </div>
 
@@ -950,11 +975,26 @@ function MapContent() {
                         <div className="overlay" onClick={() => setHistoryOpen(false)} />
                         <div className="popup" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
                             <div className="popup-header">
-                                <h3>📜 ประวัติการจอด (ล่าสุด)</h3>
+                                <h3>📜 ประวัติการแจ้งเตือน</h3>
                                 <button onClick={() => setHistoryOpen(false)}>
                                     <X size={24} />
                                 </button>
                             </div>
+
+                            {/* Filter Toggle */}
+                            <div style={{ padding: '10px 16px', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <input
+                                    type="checkbox"
+                                    id="alertFilter"
+                                    checked={showAlertsOnly}
+                                    onChange={(e) => setShowAlertsOnly(e.target.checked)}
+                                    style={{ width: '18px', height: '18px' }}
+                                />
+                                <label htmlFor="alertFilter" style={{ color: '#ccc', fontSize: '0.9rem', cursor: 'pointer' }}>
+                                    แสดงเฉพาะแจ้งเตือน (Alerts Only)
+                                </label>
+                            </div>
+
                             <div className="popup-content">
                                 {logsLoading ? (
                                     <p style={{ textAlign: 'center', padding: '20px' }}>กำลังโหลด...</p>
@@ -962,29 +1002,35 @@ function MapContent() {
                                     <p style={{ textAlign: 'center', padding: '20px', color: '#888' }}>ไม่มีข้อมูลประวัติ</p>
                                 ) : (
                                     <ul style={{ listStyle: 'none', padding: 0 }}>
-                                        {logs.map((log, i) => (
-                                            <li key={i} style={{ borderBottom: '1px solid #333', padding: '10px 0', fontSize: '0.9rem' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                                    <span style={{ color: '#aaa' }}>
-                                                        {new Date(log.timestamp).toLocaleString('th-TH', {
-                                                            timeZone: 'Asia/Bangkok',
-                                                            day: '2-digit', month: '2-digit', year: 'numeric',
-                                                            hour: '2-digit', minute: '2-digit', second: '2-digit'
-                                                        })}
-                                                    </span>
-                                                    <span style={{
-                                                        fontWeight: 'bold',
-                                                        color: log.status.includes('STOLEN') ? '#ff6b6b' :
-                                                            log.status.includes('CRASH') ? '#ff9f43' : '#4ecdc4'
-                                                    }}>
-                                                        {log.status}
-                                                    </span>
-                                                </div>
-                                                <div style={{ color: '#666', fontSize: '0.8rem' }}>
-                                                    พิกัด: {Number(log.lat).toFixed(5)}, {Number(log.lng).toFixed(5)}
-                                                </div>
-                                            </li>
-                                        ))}
+                                        {logs.filter(log => !showAlertsOnly || (log.status !== 'NORMAL' && log.status !== 'UNKNOWN' && log.status != '0')).map((log, i) => {
+                                            const statusText = (log.status === '1' || (log.status || '').includes('STOLEN')) ? 'STOLEN' :
+                                                (log.status === '2' || (log.status || '').includes('CRASH')) ? 'CRASH' :
+                                                    (log.status === '0' || log.status === 'NORMAL') ? 'NORMAL' : log.status;
+                                            return (
+                                                <li key={i} style={{ borderBottom: '1px solid #333', padding: '10px 0', fontSize: '0.9rem' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                                        <span style={{ color: '#aaa' }}>
+                                                            {new Date(log.timestamp).toLocaleString('th-TH', {
+                                                                timeZone: 'Asia/Bangkok',
+                                                                day: '2-digit', month: '2-digit', year: 'numeric',
+                                                                hour: '2-digit', minute: '2-digit', second: '2-digit'
+                                                            })}
+                                                        </span>
+                                                        <span style={{
+                                                            fontWeight: 'bold',
+                                                            color: statusText === 'STOLEN' ? '#ff6b6b' :
+                                                                statusText === 'CRASH' ? '#ff9f43' :
+                                                                    statusText.includes('GEOFENCE') ? '#ffe66d' : '#4ecdc4'
+                                                        }}>
+                                                            {statusText}
+                                                        </span>
+                                                    </div>
+                                                    <div style={{ color: '#666', fontSize: '0.8rem' }}>
+                                                        พิกัด: {Number(log.lat).toFixed(5)}, {Number(log.lng).toFixed(5)}
+                                                    </div>
+                                                </li>
+                                            )
+                                        })}
                                     </ul>
                                 )}
                             </div>
