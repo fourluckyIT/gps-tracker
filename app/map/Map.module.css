@@ -1,0 +1,532 @@
+.appContainer {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    background: #0a0a0a;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Alert Popup */
+.alertOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.3s ease;
+    backdrop-filter: blur(5px);
+}
+
+.alertBox {
+    background: #1a1a1a;
+    border: 2px solid #ffaa00;
+    /* Default Crash */
+    padding: 30px;
+    border-radius: 20px;
+    text-align: center;
+    width: 90%;
+    max-width: 400px;
+    box-shadow: 0 0 50px rgba(255, 170, 0, 0.3);
+    animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.alertBox.stolen {
+    border-color: #ff4444;
+    box-shadow: 0 0 50px rgba(255, 68, 68, 0.3);
+}
+
+.alertIcon {
+    font-size: 4rem;
+    margin-bottom: 20px;
+    animation: pulse 1s infinite;
+    display: inline-block;
+}
+
+.alertBox h2 {
+    color: #ffaa00;
+    margin: 0 0 10px 0;
+    font-size: 2rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.alertBox.stolen h2 {
+    color: #ff4444;
+}
+
+.alertBox p {
+    color: #ccc;
+    margin: 0 0 25px 0;
+    font-size: 1rem;
+    line-height: 1.5;
+}
+
+.alertActions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.btnDismiss {
+    background: #333;
+    color: white;
+    border: none;
+    padding: 15px;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btnDismiss:active {
+    transform: scale(0.98);
+}
+
+.btnCall {
+    background: #ffaa00;
+    color: black;
+    border: none;
+    padding: 15px;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: bold;
+    text-decoration: none;
+    display: block;
+    transition: all 0.2s;
+}
+
+.alertBox.stolen .btnCall {
+    background: #ff4444;
+}
+
+.btnCall:active {
+    transform: scale(0.98);
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(50px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.loadingScreen,
+.errorScreen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    background: #0a0a0a;
+    color: white;
+}
+
+/* Header */
+.header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background: #111;
+    border-bottom: 1px solid #222;
+}
+
+.menuBtn {
+    background: none;
+    border: none;
+    color: white;
+    padding: 8px;
+    cursor: pointer;
+}
+
+.headerTitle {
+    flex: 1;
+    text-align: center;
+    font-weight: bold;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.statusDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ff4444;
+}
+
+.statusDot.online {
+    background: #00ff9d;
+}
+
+/* Map Section */
+.mapSection {
+    flex: 0 0 65%;
+    position: relative;
+    margin: 8px;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.fabMyLocation {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #1a1a2e;
+    border: 2px solid #4ECDC4;
+    color: #4ECDC4;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+}
+
+/* Info Section */
+.infoSection {
+    flex: 0 0 auto;
+    padding: 12px 16px;
+    padding-bottom: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+}
+
+.infoCard {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: #151515;
+    border-radius: 12px;
+    border: 1px solid #222;
+}
+
+.infoIcon {
+    color: #4ECDC4;
+    flex-shrink: 0;
+}
+
+.infoContent {
+    flex: 1;
+    min-width: 0;
+}
+
+.carName {
+    font-size: 18px;
+    font-weight: bold;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.editIcon {
+    color: #666;
+}
+
+.nameInput {
+    font-size: 18px;
+    font-weight: bold;
+    color: white;
+    background: #222;
+    border: 1px solid #4ECDC4;
+    border-radius: 4px;
+    padding: 4px 8px;
+    width: 100%;
+}
+
+.infoLabel {
+    font-size: 12px;
+    color: #666;
+    margin-top: 2px;
+}
+
+.parkingTime {
+    font-size: 20px;
+    font-weight: bold;
+    color: #FFE66D;
+}
+
+.geofenceBadges {
+    display: flex;
+    gap: 8px;
+}
+
+.geofenceBadge {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    background: #151515;
+    border-radius: 8px;
+    border: 2px solid #333;
+    font-size: 11px;
+    color: #888;
+}
+
+.geofenceBadge.active {
+    color: white;
+}
+
+.geofenceBadge.current {
+    background: rgba(78, 205, 196, 0.1);
+}
+
+.badgeDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* Side Menu */
+.sideMenu {
+    position: fixed;
+    top: 0;
+    left: -300px;
+    width: 300px;
+    height: 100%;
+    background: #111;
+    z-index: 200;
+    transition: left 0.3s ease;
+    overflow-y: auto;
+}
+
+.sideMenu.open {
+    left: 0;
+}
+
+.menuHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid #222;
+}
+
+.menuHeader h2 {
+    color: white;
+    margin: 0;
+    font-size: 18px;
+}
+
+.menuHeader button {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+}
+
+.menuSection {
+    padding: 16px;
+}
+
+.menuSection h3 {
+    color: #888;
+    font-size: 12px;
+    text-transform: uppercase;
+    margin: 0 0 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.menuHint {
+    color: #555;
+    font-size: 11px;
+    margin: 0 0 16px 0;
+}
+
+.geofenceSlot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: #1a1a1a;
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+
+.slotColor {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.slotInfo {
+    flex: 1;
+    min-width: 0;
+}
+
+.slotNameInput {
+    display: block;
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed #666;
+    color: white;
+    font-size: 14px;
+    padding: 2px 0;
+    margin-bottom: 4px;
+}
+
+.slotNameInput:focus {
+    border-bottom: 1px solid #4ECDC4;
+    outline: none;
+}
+
+.slotRadius {
+    font-size: 11px;
+    color: #666;
+}
+
+.slotEmpty {
+    color: #555;
+    font-size: 13px;
+}
+
+.slotActions {
+    display: flex;
+    gap: 4px;
+}
+
+.slotBtn {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.slotBtn.edit {
+    background: #222;
+    color: #4ECDC4;
+}
+
+.slotBtn.delete {
+    background: #222;
+    color: #FF6B6B;
+}
+
+/* Overlay */
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 150;
+}
+
+/* Popup */
+.popup {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 90%;
+    max-width: 400px;
+    background: #111;
+    border-radius: 16px;
+    z-index: 300;
+    overflow: hidden;
+}
+
+.popupHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid #222;
+}
+
+.popupHeader h3 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.popupHeader button {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+}
+
+.popupMap {
+    height: 250px;
+}
+
+.popupControls {
+    padding: 16px;
+}
+
+.popupControls label {
+    display: block;
+    color: white;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.popupControls input[type="range"] {
+    width: 100%;
+}
+
+.saveBtn {
+    width: 100%;
+    padding: 16px;
+    background: #4ECDC4;
+    border: none;
+    color: #000;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.saveBtn:hover {
+    background: #3dbdb5;
+}
