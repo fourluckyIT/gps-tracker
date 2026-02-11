@@ -9,6 +9,7 @@ import toast, { Toaster } from "react-hot-toast";
 import {
     Menu, X, MapPin, Crosshair, Plus, Trash2, Edit3, Check, Clock, Car
 } from "lucide-react";
+import styles from "./Map.module.css";
 
 // Config
 // Config
@@ -54,6 +55,10 @@ function MapContent() {
     const [isEditingName, setIsEditingName] = useState(false);
     const [parkingStartTime, setParkingStartTime] = useState(null);
     const [lastPosition, setLastPosition] = useState(null);
+
+    // User position (Phone GPS)
+    const [userPosition, setUserPosition] = useState(null);
+    const [distanceToCar, setDistanceToCar] = useState(null);
 
     // UI state
     const [menuOpen, setMenuOpen] = useState(false);
@@ -263,6 +268,36 @@ function MapContent() {
             });
     };
 
+    // Watch User Position (Works in Capacitor WebView without HTTPS)
+    useEffect(() => {
+        if (!navigator.geolocation) return;
+
+        const watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                const pos = { lat: position.coords.latitude, lng: position.coords.longitude };
+                setUserPosition(pos);
+            },
+            (err) => {
+                console.error("Error watching position:", err);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            }
+        );
+
+        return () => navigator.geolocation.clearWatch(watchId);
+    }, []);
+
+    // Calculate distance to car
+    useEffect(() => {
+        if (userPosition && carPosition) {
+            const dist = getDistance(userPosition, carPosition);
+            setDistanceToCar(dist);
+        }
+    }, [userPosition, carPosition]);
+
     // Auto-center map on car position
     useEffect(() => {
         if (carPosition && map) {
@@ -325,6 +360,32 @@ function MapContent() {
     const isStolen = (carStatus === "1" || (carStatus || "").includes("STOLEN"));
     const isCrash = (carStatus === "2" || (carStatus || "").includes("CRASH"));
     const showAlert = (isStolen || isCrash) && !alertDismissed;
+
+    // Notification Effect
+    useEffect(() => {
+        if ('Notification' in window && Notification.permission !== 'granted') {
+            Notification.requestPermission();
+        }
+    }, []);
+
+    useEffect(() => {
+        if (showAlert && 'Notification' in window && Notification.permission === 'granted') {
+            // Check if we already notified recently? (Simple version: notify on state change)
+            // effective way: notify only if displayed. 
+            // Since showAlert depends on !alertDismissed, this will fire when alert appears.
+
+            const title = isStolen ? "🚨 รถถูกขโมย!" : "💥 เกิดอุบัติเหตุ!";
+            const body = isStolen ? "มีการพยายามสตาร์ทรถหรือเคลื่อนย้าย" : "ตรวจพบการชนหรือกระแทก";
+
+            // Send notification
+            new Notification(title, {
+                body: body,
+                icon: '/icon.png', // valid if exists, else ignores
+                tag: 'alert-critical', // replace existing
+                requireInteraction: true
+            });
+        }
+    }, [showAlert, isStolen]);
 
     // Sound Alert Effect (Stolen/Crash)
     useEffect(() => {
@@ -493,18 +554,18 @@ function MapContent() {
             <Toaster position="top-center" />
 
             {/* Header */}
-            <div className="header">
-                <button className="menu-btn" onClick={() => setMenuOpen(true)}>
+            <div className={styles.header}>
+                <button className={styles.menuBtn} onClick={() => setMenuOpen(true)}>
                     <Menu size={24} />
                 </button>
-                <div className="header-title">
-                    <span className={`status-dot ${connected ? "online" : ""}`} />
+                <div className={styles.headerTitle}>
+                    <span className={`${styles.statusDot} ${connected ? styles.online : ""}`} />
                     GPS Tracker
                 </div>
             </div>
 
             {/* Main Map (Expanded to fill more space, pushing info down) */}
-            <div className="map-section" style={{ flex: 1, marginBottom: '0' }}>
+            <div className={styles.mapSection} style={{ flex: 1, marginBottom: '0' }}>
                 <GoogleMap
                     mapContainerStyle={{ width: "100%", height: "100%" }}
                     center={carPosition || defaultCenter}
@@ -531,6 +592,22 @@ function MapContent() {
                             }}
                         />
                     )}
+
+                    {/* User Marker (Blue Dot) */}
+                    {userPosition && (
+                        <Marker
+                            position={userPosition}
+                            icon={{
+                                path: window.google?.maps?.SymbolPath?.CIRCLE,
+                                scale: 6,
+                                fillOpacity: 1,
+                                fillColor: "#4285F4",
+                                strokeColor: "#ffffff",
+                                strokeWeight: 2,
+                            }}
+                        />
+                    )}
+
                     {geofences.map((gf, index) =>
                         gf ? (
                             <Circle
@@ -551,9 +628,13 @@ function MapContent() {
 
                 {/* FAB */}
                 <button
-                    className="fab-mylocation"
+                    className={styles.fabMyLocation}
                     onClick={() => {
-                        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+                        // Capacitor WebView allows geolocation even on HTTP
+                        // Check if we are in Capacitor or strict browser
+                        const isCapacitor = window.Capacitor !== undefined;
+
+                        if (!isCapacitor && window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
                             toast.error("⚠️ ต้องใช้ HTTPS (แม่กุญแจ) ถึงจะระบุตำแหน่งได้ครับ");
                             return;
                         }
@@ -584,7 +665,7 @@ function MapContent() {
             </div>
 
             {/* New Info Section (Replacing old layout) */}
-            <div className="info-section" style={{ background: '#111', borderTop: '1px solid #333' }}>
+            <div className={styles.infoSection} style={{ background: '#111', borderTop: '1px solid #333' }}>
 
                 {/* Car Name Row */}
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
@@ -597,10 +678,10 @@ function MapContent() {
                             onBlur={() => setIsEditingName(false)}
                             onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
                             autoFocus
-                            className="name-input"
+                            className={styles.nameInput}
                         />
                     ) : (
-                        <div className="car-name" onClick={() => setIsEditingName(true)} style={{ fontSize: '1.1rem' }}>
+                        <div className={styles.carName} onClick={() => setIsEditingName(true)} style={{ fontSize: '1.1rem' }}>
                             {carName || "ตั้งชื่อรถ"}
                             <Edit3 size={14} style={{ marginLeft: '5px', opacity: 0.5 }} />
                         </div>
@@ -626,6 +707,18 @@ function MapContent() {
                     <div style={{ display: 'flex', alignItems: 'center', color: '#FFE66D', fontWeight: 'bold', fontSize: '1rem', marginTop: '4px' }}>
                         <Crosshair size={16} style={{ marginRight: '8px' }} />
                         <span>จอดนาน: {parkingDisplay}</span>
+                    </div>
+
+                    {/* Distance to Car */}
+                    <div style={{ display: 'flex', alignItems: 'center', color: '#4ECDC4', fontWeight: 'bold', fontSize: '1rem', marginTop: '4px' }}>
+                        <MapPin size={16} style={{ marginRight: '8px' }} />
+                        <span>
+                            ห่างจากรถ: {distanceToCar
+                                ? (distanceToCar < 1000
+                                    ? `${Math.round(distanceToCar)} ม.`
+                                    : `${(distanceToCar / 1000).toFixed(1)} กม.`)
+                                : "กำลังระบุ..."}
+                        </span>
                     </div>
 
                     {/* Focus Button */}
@@ -681,17 +774,17 @@ function MapContent() {
             </div>
 
             {/* Side Menu */}
-            <div className={`side-menu ${menuOpen ? "open" : ""}`}>
-                <div className="menu-header">
+            <div className={`${styles.sideMenu} ${menuOpen ? styles.open : ""}`}>
+                <div className={styles.menuHeader}>
                     <h2>ตั้งค่า</h2>
                     <button onClick={() => setMenuOpen(false)}>
                         <X size={24} />
                     </button>
                 </div>
 
-                <div className="menu-section">
+                <div className={styles.menuSection}>
                     <h3><Car size={18} /> สถานะปัจจุบัน</h3>
-                    <div className="status-card" style={{ background: '#222', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
+                    <div className={styles.infoCard} style={{ background: '#222', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
                         <p style={{ margin: '5px 0', fontSize: '0.9rem', color: '#ccc' }}>
                             <Clock size={14} style={{ display: 'inline', marginRight: '5px' }} />
                             ล่าสุด: {parkingStartTime ? new Date(parkingStartTime).toLocaleTimeString() : "-"}
@@ -704,6 +797,7 @@ function MapContent() {
                             <Crosshair size={14} style={{ display: 'inline', marginRight: '5px' }} />
                             จอดนาน: {parkingDisplay}
                         </p>
+
 
                         <button
                             onClick={() => {
@@ -732,7 +826,7 @@ function MapContent() {
                     </div>
 
                     <h3><Clock size={18} /> ประวัติการจอด</h3>
-                    <div className="status-card" style={{ background: '#222', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
+                    <div className={styles.infoCard} style={{ background: '#222', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
                         <button
                             onClick={fetchHistoryLogs}
                             style={{
@@ -757,8 +851,8 @@ function MapContent() {
 
                     {/* SOS Settings */}
                     <h3><div style={{ display: 'flex', alignItems: 'center' }}>🚨 เบอร์ฉุกเฉิน (SOS)</div></h3>
-                    <div className="status-card" style={{ background: '#222', padding: '15px', borderRadius: '8px', marginBottom: '15px' }}>
-                        <p className="menu-hint" style={{ marginBottom: '10px' }}>ระบุเบอร์โทรศัพท์สูงสุด 3 เบอร์ สำหรับปุ่มโทรฉุกเฉิน</p>
+                    <div className={styles.infoCard} style={{ background: '#222', padding: '15px', borderRadius: '8px', marginBottom: '15px' }}>
+                        <p className={styles.menuHint} style={{ marginBottom: '10px' }}>ระบุเบอร์โทรศัพท์สูงสุด 3 เบอร์ สำหรับปุ่มโทรฉุกเฉิน</p>
                         {sosNumbers.map((num, idx) => (
                             <div key={idx} style={{ marginBottom: '8px', display: 'flex', alignItems: 'center' }}>
                                 <span style={{ color: '#666', marginRight: '8px', width: '20px' }}>{idx + 1}.</span>
@@ -802,46 +896,46 @@ function MapContent() {
                     </div>
 
                     <h3><MapPin size={18} /> ตำแหน่งจอด (3 จุด)</h3>
-                    <p className="menu-hint">กดเพื่อเพิ่ม/แก้ไข ปล่อยว่างได้</p>
+                    <p className={styles.menuHint}>กดเพื่อเพิ่ม/แก้ไข ปล่อยว่างได้</p>
 
                     {[0, 1, 2].map((index) => {
                         const gf = geofences[index];
                         return (
-                            <div key={index} className="geofence-slot">
+                            <div key={index} className={styles.geofenceSlot}>
                                 <div
-                                    className="slot-color"
+                                    className={styles.slotColor}
                                     style={{ background: GEOFENCE_COLORS[index] }}
                                 />
-                                <div className="slot-info">
+                                <div className={styles.slotInfo}>
                                     {gf ? (
                                         <>
                                             <input
                                                 type="text"
                                                 value={gf.name}
                                                 onChange={(e) => updateGeofenceName(index, e.target.value)}
-                                                className="slot-name-input"
+                                                className={styles.slotNameInput}
                                             />
                                             {gf.address && (
                                                 <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px', lineHeight: '1.2' }}>
                                                     {gf.address}
                                                 </div>
                                             )}
-                                            <span className="slot-radius">รัศมี {gf.radius}m</span>
+                                            <span className={styles.slotRadius}>รัศมี {gf.radius}m</span>
                                         </>
                                     ) : (
-                                        <span className="slot-empty">{GEOFENCE_NAMES[index]} (ว่าง)</span>
+                                        <span className={styles.slotEmpty}>{GEOFENCE_NAMES[index]} (ว่าง)</span>
                                     )}
                                 </div>
-                                <div className="slot-actions">
+                                <div className={styles.slotActions}>
                                     <button
-                                        className="slot-btn edit"
+                                        className={`${styles.slotBtn} ${styles.edit}`}
                                         onClick={() => openGeofencePopup(index)}
                                     >
                                         {gf ? <Edit3 size={16} /> : <Plus size={16} />}
                                     </button>
                                     {gf && (
                                         <button
-                                            className="slot-btn delete"
+                                            className={`${styles.slotBtn} ${styles.delete}`}
                                             onClick={() => deleteGeofence(index)}
                                         >
                                             <Trash2 size={16} />
@@ -855,24 +949,24 @@ function MapContent() {
             </div >
 
             {/* Menu Overlay */}
-            {menuOpen && <div className="overlay" onClick={() => setMenuOpen(false)} />}
+            {menuOpen && <div className={styles.overlay} onClick={() => setMenuOpen(false)} />}
 
             {/* CRITICAL ALERT POPUP */}
             {
                 showAlert && (
-                    <div className="alert-overlay">
-                        <div className="alert-box">
-                            <div className="alert-icon">
+                    <div className={styles.alertOverlay}>
+                        <div className={`${styles.alertBox} ${isStolen ? styles.stolen : styles.crash}`}>
+                            <div className={styles.alertIcon}>
                                 {isStolen ? "🚨" : "💥"}
                             </div>
                             <h2>{isStolen ? "รถถูกขโมย!" : "เกิดอุบัติเหตุ!"}</h2>
                             <p>{isStolen ? "มีการพยายามสตาร์ทรถหรือเคลื่อนย้ายโดยไม่ได้รับอนุญาต" : "ตรวจพบการชนหรือการกระแทกรุนแรง"}</p>
 
-                            <div className="alert-actions">
-                                <button className="btn-dismiss" onClick={() => setAlertDismissed(true)}>
+                            <div className={styles.alertActions}>
+                                <button className={styles.btnDismiss} onClick={() => setAlertDismissed(true)}>
                                     รับทราบ (ปิดแจ้งเตือน)
                                 </button>
-                                <a href={`tel:${sosNumbers.find(n => n.trim()) || "191"}`} className="btn-call">
+                                <a href={`tel:${sosNumbers.find(n => n.trim()) || "191"}`} className={styles.btnCall}>
                                     📞 โทรฉุกเฉิน ({sosNumbers.find(n => n.trim()) || "191"})
                                 </a>
                             </div>
@@ -885,9 +979,9 @@ function MapContent() {
             {
                 popupOpen && (
                     <>
-                        <div className="overlay" onClick={() => setPopupOpen(false)} />
-                        <div className="popup">
-                            <div className="popup-header">
+                        <div className={styles.overlay} onClick={() => setPopupOpen(false)} />
+                        <div className={styles.popup}>
+                            <div className={styles.popupHeader}>
                                 <h3 style={{ color: GEOFENCE_COLORS[popupIndex] }}>
                                     {GEOFENCE_NAMES[popupIndex]}
                                 </h3>
@@ -896,7 +990,7 @@ function MapContent() {
                                 </button>
                             </div>
 
-                            <div className="popup-map">
+                            <div className={styles.popupMap}>
                                 <GoogleMap
                                     mapContainerStyle={{ width: "100%", height: "100%" }}
                                     center={popupPosition}
@@ -947,7 +1041,7 @@ function MapContent() {
                                 </GoogleMap>
                             </div>
 
-                            <div className="popup-controls">
+                            <div className={styles.popupControls}>
                                 <label>รัศมี: {popupRadius} เมตร</label>
                                 <input
                                     type="range"
@@ -959,7 +1053,7 @@ function MapContent() {
                                 />
                             </div>
 
-                            <button className="save-btn" onClick={saveGeofence}>
+                            <button className={styles.saveBtn} onClick={saveGeofence}>
                                 <Check size={20} /> บันทึก
                             </button>
                         </div>
@@ -972,9 +1066,9 @@ function MapContent() {
             {
                 historyOpen && (
                     <>
-                        <div className="overlay" onClick={() => setHistoryOpen(false)} />
-                        <div className="popup" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
-                            <div className="popup-header">
+                        <div className={styles.overlay} onClick={() => setHistoryOpen(false)} />
+                        <div className={styles.popup} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+                            <div className={styles.popupHeader}>
                                 <h3>📜 ประวัติการแจ้งเตือน</h3>
                                 <button onClick={() => setHistoryOpen(false)}>
                                     <X size={24} />
@@ -995,7 +1089,7 @@ function MapContent() {
                                 </label>
                             </div>
 
-                            <div className="popup-content">
+                            <div className={styles.popupControls}>  {/* Reuse popup-controls for padding?? or create class? Using popupControls for padding is fine or define new class */}
                                 {logsLoading ? (
                                     <p style={{ textAlign: 'center', padding: '20px' }}>กำลังโหลด...</p>
                                 ) : logs.length === 0 ? (
@@ -1039,502 +1133,6 @@ function MapContent() {
                 )
             }
 
-            <style jsx>{`
-                .app-container {
-                    display: flex;
-                    flex-direction: column;
-                    height: 100vh;
-                    height: 100dvh;
-                    background: #0a0a0a;
-                    overflow: hidden;
-                    position: relative;
-                }
-
-                /* Alert Popup */
-                .alert-overlay {
-                    position: fixed;
-                    top: 0; left: 0; right: 0; bottom: 0;
-                    background: rgba(0, 0, 0, 0.9);
-                    z-index: 9999;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    animation: fadeIn 0.3s ease;
-                    backdrop-filter: blur(5px);
-                }
-
-                .alert-box {
-                    background: #1a1a1a;
-                    border: 2px solid ${isStolen ? '#ff4444' : '#ffaa00'};
-                    padding: 30px;
-                    border-radius: 20px;
-                    text-align: center;
-                    width: 90%;
-                    max-width: 400px;
-                    box-shadow: 0 0 50px ${isStolen ? 'rgba(255, 68, 68, 0.3)' : 'rgba(255, 170, 0, 0.3)'};
-                    animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-                }
-
-                .alert-icon {
-                    font-size: 4rem;
-                    margin-bottom: 20px;
-                    animation: pulse 1s infinite;
-                    display: inline-block;
-                }
-
-                .alert-box h2 {
-                    color: ${isStolen ? '#ff4444' : '#ffaa00'};
-                    margin: 0 0 10px 0;
-                    font-size: 2rem;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                }
-
-                .alert-box p {
-                    color: #ccc;
-                    margin: 0 0 25px 0;
-                    font-size: 1rem;
-                    line-height: 1.5;
-                }
-
-                .alert-actions {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 10px;
-                }
-
-                .btn-dismiss {
-                    background: #333;
-                    color: white;
-                    border: none;
-                    padding: 15px;
-                    border-radius: 10px;
-                    font-size: 1rem;
-                    font-weight: bold;
-                    cursor: pointer;
-                    transition: all 0.2s;
-                }
-                .btn-dismiss:active { transform: scale(0.98); }
-
-                .btn-call {
-                    background: ${isStolen ? '#ff4444' : '#ffaa00'};
-                    color: black;
-                    border: none;
-                    padding: 15px;
-                    border-radius: 10px;
-                    font-size: 1rem;
-                    font-weight: bold;
-                    text-decoration: none;
-                    display: block;
-                    transition: all 0.2s;
-                }
-                .btn-call:active { transform: scale(0.98); }
-
-                @keyframes pulse {
-                    0% { transform: scale(1); }
-                    50% { transform: scale(1.1); }
-                    100% { transform: scale(1); }
-                }
-                
-                @keyframes slideUp {
-                    from { transform: translateY(50px); opacity: 0; }
-                    to { transform: translateY(0); opacity: 1; }
-                }
-
-
-                .loading-screen,
-                .error-screen {
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    height: 100vh;
-                    background: #0a0a0a;
-                    color: white;
-                }
-
-                /* Header */
-                .header {
-                    display: flex;
-                    align-items: center;
-                    padding: 12px 16px;
-                    background: #111;
-                    border-bottom: 1px solid #222;
-                }
-
-                .menu-btn {
-                    background: none;
-                    border: none;
-                    color: white;
-                    padding: 8px;
-                    cursor: pointer;
-                }
-
-                .header-title {
-                    flex: 1;
-                    text-align: center;
-                    font-weight: bold;
-                    color: white;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 8px;
-                }
-
-                .status-dot {
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 50%;
-                    background: #ff4444;
-                }
-
-                .status-dot.online {
-                    background: #00ff9d;
-                }
-
-                /* Map Section - 65% with rounded corners */
-                .map-section {
-                    flex: 0 0 65%;
-                    position: relative;
-                    margin: 8px;
-                    border-radius: 16px;
-                    overflow: hidden;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-                }
-
-                .fab-mylocation {
-                    position: absolute;
-                    bottom: 16px;
-                    right: 16px;
-                    width: 48px;
-                    height: 48px;
-                    border-radius: 50%;
-                    background: #1a1a2e;
-                    border: 2px solid #4ECDC4;
-                    color: #4ECDC4;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-                }
-
-                /* Info Section - fixed at bottom */
-                .info-section {
-                    flex: 0 0 auto;
-                    padding: 12px 16px;
-                    padding-bottom: 20px;
-                    display: flex;
-                    flex-direction: column;
-                    gap: 10px;
-                    overflow: hidden;
-                }
-
-                .info-card {
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    padding: 12px;
-                    background: #151515;
-                    border-radius: 12px;
-                    border: 1px solid #222;
-                }
-
-                .info-icon {
-                    color: #4ECDC4;
-                    flex-shrink: 0;
-                }
-
-                .info-content {
-                    flex: 1;
-                    min-width: 0;
-                }
-
-                .car-name {
-                    font-size: 18px;
-                    font-weight: bold;
-                    color: white;
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    cursor: pointer;
-                }
-
-                .edit-icon {
-                    color: #666;
-                }
-
-                .name-input {
-                    font-size: 18px;
-                    font-weight: bold;
-                    color: white;
-                    background: #222;
-                    border: 1px solid #4ECDC4;
-                    border-radius: 4px;
-                    padding: 4px 8px;
-                    width: 100%;
-                }
-
-                .info-label {
-                    font-size: 12px;
-                    color: #666;
-                    margin-top: 2px;
-                }
-
-                .parking-time {
-                    font-size: 20px;
-                    font-weight: bold;
-                    color: #FFE66D;
-                }
-
-                .geofence-badges {
-                    display: flex;
-                    gap: 8px;
-                }
-
-                .geofence-badge {
-                    flex: 1;
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    padding: 8px 10px;
-                    background: #151515;
-                    border-radius: 8px;
-                    border: 2px solid #333;
-                    font-size: 11px;
-                    color: #888;
-                }
-
-                .geofence-badge.active {
-                    color: white;
-                }
-
-                .geofence-badge.current {
-                    background: rgba(78, 205, 196, 0.1);
-                }
-
-                .badge-dot {
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 50%;
-                    flex-shrink: 0;
-                }
-
-                /* Side Menu */
-                .side-menu {
-                    position: fixed;
-                    top: 0;
-                    left: -300px;
-                    width: 300px;
-                    height: 100%;
-                    background: #111;
-                    z-index: 200;
-                    transition: left 0.3s ease;
-                    overflow-y: auto;
-                }
-
-                .side-menu.open {
-                    left: 0;
-                }
-
-                .menu-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    padding: 16px;
-                    border-bottom: 1px solid #222;
-                }
-
-                .menu-header h2 {
-                    color: white;
-                    margin: 0;
-                    font-size: 18px;
-                }
-
-                .menu-header button {
-                    background: none;
-                    border: none;
-                    color: white;
-                    cursor: pointer;
-                }
-
-                .menu-section {
-                    padding: 16px;
-                }
-
-                .menu-section h3 {
-                    color: #888;
-                    font-size: 12px;
-                    text-transform: uppercase;
-                    margin: 0 0 8px 0;
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                }
-
-                .menu-hint {
-                    color: #555;
-                    font-size: 11px;
-                    margin: 0 0 16px 0;
-                }
-
-                .geofence-slot {
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    padding: 12px;
-                    background: #1a1a1a;
-                    border-radius: 8px;
-                    margin-bottom: 8px;
-                }
-
-                .slot-color {
-                    width: 16px;
-                    height: 16px;
-                    border-radius: 50%;
-                    flex-shrink: 0;
-                }
-
-                .slot-info {
-                    flex: 1;
-                    min-width: 0;
-                }
-
-                .slot-name-input {
-                    display: block;
-                    width: 100%;
-                    background: transparent;
-                    border: none;
-                    border-bottom: 1px dashed #666;
-                    color: white;
-                    font-size: 14px;
-                    padding: 2px 0;
-                    margin-bottom: 4px;
-                }
-                .slot-name-input:focus {
-                    border-bottom: 1px solid #4ECDC4;
-                    outline: none;
-                }
-
-                .slot-radius {
-                    font-size: 11px;
-                    color: #666;
-                }
-
-                .slot-empty {
-                    color: #555;
-                    font-size: 13px;
-                }
-
-                .slot-actions {
-                    display: flex;
-                    gap: 4px;
-                }
-
-                .slot-btn {
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 6px;
-                    border: none;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-
-                .slot-btn.edit {
-                    background: #222;
-                    color: #4ECDC4;
-                }
-
-                .slot-btn.delete {
-                    background: #222;
-                    color: #FF6B6B;
-                }
-
-                /* Overlay */
-                .overlay {
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    right: 0;
-                    bottom: 0;
-                    background: rgba(0,0,0,0.7);
-                    z-index: 150;
-                }
-
-                /* Popup */
-                .popup {
-                    position: fixed;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                    width: 90%;
-                    max-width: 400px;
-                    background: #111;
-                    border-radius: 16px;
-                    z-index: 300;
-                    overflow: hidden;
-                }
-
-                .popup-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    padding: 16px;
-                    border-bottom: 1px solid #222;
-                }
-
-                .popup-header h3 {
-                    margin: 0;
-                    font-size: 18px;
-                }
-
-                .popup-header button {
-                    background: none;
-                    border: none;
-                    color: white;
-                    cursor: pointer;
-                }
-
-                .popup-map {
-                    height: 250px;
-                }
-
-                .popup-controls {
-                    padding: 16px;
-                }
-
-                .popup-controls label {
-                    display: block;
-                    color: white;
-                    font-size: 14px;
-                    margin-bottom: 8px;
-                }
-
-                .popup-controls input[type="range"] {
-                    width: 100%;
-                }
-
-                .save-btn {
-                    width: 100%;
-                    padding: 16px;
-                    background: #4ECDC4;
-                    border: none;
-                    color: #000;
-                    font-size: 16px;
-                    font-weight: bold;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 8px;
-                }
-
-                .save-btn:hover {
-                    background: #3dbdb5;
-                }
-            `}</style>
 
         </div >
     );
