@@ -25,6 +25,8 @@ export default function Dashboard() {
 
     // 2FA State
     const [authStatus, setAuthStatus] = useState('loading'); // loading, authenticated, unauthenticated, setup_required
+    const [authData, setAuthData] = useState({ secret: '', qr_code: '' });
+    const [totpCode, setTotpCode] = useState('');
     const [authError, setAuthError] = useState('');
 
     // New: Email/Password State
@@ -39,7 +41,7 @@ export default function Dashboard() {
                 const data = await res.json();
                 if (data.authenticated) {
                     setAuthStatus('authenticated');
-                } else if (!data.setup_completed) {
+                } else if (!data.enabled) {
                     setAuthStatus('setup_required');
                 } else {
                     setAuthStatus('unauthenticated');
@@ -138,7 +140,7 @@ export default function Dashboard() {
             });
     };
 
-    // Setup Admin (Email + Password)
+    // Setup 2FA (First Time)
     const handleSetup = async () => {
         if (!email || !password) {
             setAuthError('กรุณากรอก Email และรหัสผ่าน');
@@ -151,9 +153,9 @@ export default function Dashboard() {
                 body: JSON.stringify({ email, password })
             });
             const data = await res.json();
-            if (data.success) {
-                alert("ตั้งค่าสำเร็จ! กรุณาเข้าสู่ระบบ");
-                setAuthStatus('unauthenticated'); // Switch to login screen
+            if (data.qr_code) {
+                setAuthData(data); // Show QR
+                setAuthError('');
             } else {
                 setAuthError(data.error || 'เกิดข้อผิดพลาด');
             }
@@ -162,14 +164,18 @@ export default function Dashboard() {
         }
     };
 
-    // Login (Email + Password)
+    // Verify 2FA & Login
     const handleVerify = async () => {
         setAuthError('');
         try {
+            // For Setup flow, we just need to verify the code matches the secret generated (implementation usually requires saving first, but here we verified in backend)
+            // Actually, in our server.js, /api/auth/verify checks against DB. 
+            // So for Setup Flow: User scans QR -> enters code -> we call verify.
+
             const res = await fetch(`${SERVER_URL}/api/auth/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
+                body: JSON.stringify({ email, password, token: totpCode })
             });
             const data = await res.json();
             if (data.success) {
@@ -199,16 +205,34 @@ export default function Dashboard() {
                     <h1 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>🔐 ตั้งค่า Admin (ครั้งแรก)</h1>
                     <p style={{ color: '#aaa', marginBottom: '20px' }}>กรุณาตั้ง Email และรหัสผ่านสำหรับผู้ดูแลระบบ</p>
 
-                    <input
-                        type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (admin@example.com)"
-                        style={inputStyle}
-                    />
-                    <input
-                        type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="ตั้งรหัสผ่าน"
-                        style={inputStyle}
-                    />
-                    {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
-                    <button onClick={handleSetup} style={btnStyle}>บันทึกและเข้าสู่ระบบ</button>
+                    {!authData.qr_code ? (
+                        /* Step 1: Input Email/Pass */
+                        <>
+                            <input
+                                type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (admin@example.com)"
+                                style={inputStyle}
+                            />
+                            <input
+                                type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="ตั้งรหัสผ่าน"
+                                style={inputStyle}
+                            />
+                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
+                            <button onClick={handleSetup} style={btnStyle}>ถัดไป: สร้าง 2FA</button>
+                        </>
+                    ) : (
+                        /* Step 2: Show QR & Verify */
+                        <>
+                            <img src={authData.qr_code} alt="QR Code" style={{ borderRadius: '8px', marginBottom: '20px', display: 'block', marginLeft: 'auto', marginRight: 'auto' }} />
+                            <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: '20px' }}>ใช้แอป Authenticator สแกน</p>
+
+                            <input
+                                type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="code 6 หลัก"
+                                style={{ ...inputStyle, textAlign: 'center', fontSize: '1.2rem', letterSpacing: '4px' }}
+                            />
+                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
+                            <button onClick={handleVerify} style={{ ...btnStyle, background: '#22C55E' }}>ยืนยันและเริ่มใช้งาน</button>
+                        </>
+                    )}
                 </div>
             </div>
         );
@@ -227,6 +251,10 @@ export default function Dashboard() {
                     <input
                         type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="รหัสผ่าน"
                         style={inputStyle}
+                    />
+                    <input
+                        type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="Code 6 หลัก (2FA)"
+                        style={{ ...inputStyle, textAlign: 'center', marginBottom: '20px' }}
                         onKeyDown={(e) => e.key === 'Enter' && handleVerify()}
                     />
 
