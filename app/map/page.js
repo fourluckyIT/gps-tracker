@@ -307,11 +307,13 @@ function MapContent() {
         window.open(url, '_blank');
     };
 
-    const focusCar = () => {
-        if (map && carPosition) {
-            map.panTo(carPosition);
-            map.setZoom(18);
-            toast.success("Focus 🚗");
+    const focusUser = () => {
+        if (map && userPosition) {
+            map.panTo(userPosition);
+            map.setZoom(17);
+            toast.success("ระบุตำแหน่งของคุณ 📍");
+        } else if (!userPosition) {
+            toast.error("กำลังค้นหาตำแหน่ง GPS...");
         }
     };
 
@@ -425,7 +427,7 @@ function MapContent() {
             </div>
 
             {/* Focus/Current Location Button */}
-            <div className={styles.focusBtn} onClick={focusCar}>
+            <div className={styles.focusBtn} onClick={focusUser}>
                 <Crosshair size={24} color="#333" />
             </div>
 
