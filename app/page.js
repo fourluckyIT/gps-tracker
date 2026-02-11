@@ -1,505 +1,232 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { io } from "socket.io-client";
-import { MapPin, Clock, AlertTriangle, Car, ChevronRight, X, Wifi, WifiOff, LogOut } from "lucide-react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { Toaster, toast } from "react-hot-toast";
+import { Smartphone, Key, Car, ArrowRight, Loader2 } from "lucide-react";
 
-const SERVER_URL = typeof window !== 'undefined' ? window.location.origin : "http://localhost:3000";
+// --- CONFIG ---
+const SERVER_URL = typeof window !== 'undefined' ? window.location.origin : "http://143.14.200.117";
 
-const STATUS_CONFIG = {
-    'STOLEN': { color: '#EF4444', bg: '#FEE2E2', label: '🚨 ถูกขโมย', priority: 1 },
-    'CRASH': { color: '#F97316', bg: '#FFEDD5', label: '💥 อุบัติเหตุ', priority: 2 },
-    'NORMAL': { color: '#22C55E', bg: '#DCFCE7', label: '✅ ปกติ', priority: 3 },
-    'UNKNOWN': { color: '#6B7280', bg: '#F3F4F6', label: '❓ ไม่ทราบ', priority: 4 },
-};
+export default function MobileLogin() {
+    const router = useRouter();
 
-export default function Dashboard() {
-    const [devices, setDevices] = useState([]);
-    const [connected, setConnected] = useState(false);
-    const [selectedDevice, setSelectedDevice] = useState(null);
-    const [logs, setLogs] = useState([]);
-    const [logsLoading, setLogsLoading] = useState(false);
-    const [credentials, setCredentials] = useState({});
-    const [generatingCode, setGeneratingCode] = useState(null);
+    // State
+    const [step, setStep] = useState(0); // 0=Loading, 1=Login, 2=Register
+    const [loading, setLoading] = useState(true);
+    const [phone, setPhone] = useState("");
+    const [regForm, setRegForm] = useState({ code: "", plate: "", driver: "" });
 
-    // 2FA State
-    const [authStatus, setAuthStatus] = useState('loading'); // loading, authenticated, unauthenticated, setup_required
-    const [authData, setAuthData] = useState({ secret: '', qr_code: '' });
-    const [totpCode, setTotpCode] = useState('');
-    const [authError, setAuthError] = useState('');
-
-    // New: Email/Password State
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-
-    // Check Auth Status on Load
+    // 1. AUTO-LOGIN CHECK
     useEffect(() => {
-        const checkAuth = async () => {
-            try {
-                const res = await fetch(`${SERVER_URL}/api/auth/status`);
-                const data = await res.json();
-                if (data.authenticated) {
-                    setAuthStatus('authenticated');
-                } else if (!data.enabled) {
-                    setAuthStatus('setup_required');
-                } else {
-                    setAuthStatus('unauthenticated');
+        const checkSession = async () => {
+            const savedPhone = localStorage.getItem("user_phone");
+            if (savedPhone) {
+                try {
+                    const res = await fetch(`${SERVER_URL}/api/user/vehicles?token=${savedPhone}`);
+                    const data = await res.json();
+                    if (Array.isArray(data) && data.length > 0) {
+                        router.replace(`/map?id=${data[0].device_id}`);
+                        return;
+                    }
+                } catch (e) {
+                    console.error("Auto-login failed", e);
                 }
-            } catch (err) {
-                console.error("Auth check failed", err);
-                setAuthStatus('error');
             }
+            // If no session or invalid
+            setLoading(false);
+            setStep(1); // Go to Login
         };
-        checkAuth();
-    }, []);
 
-    // Fetch initial devices (Only if authenticated - handled by conditionals later, but fetch will fail/auth error if not)
-    useEffect(() => {
-        if (authStatus !== 'authenticated') return;
-        fetch(`${SERVER_URL}/api/devices`)
-            .then(res => res.json())
-            .then(data => setDevices(data || []))
-            .catch(err => console.error("Fetch error:", err));
-    }, [authStatus]);
+        checkSession();
+    }, [router]);
 
-    // WebSocket for real-time updates
-    useEffect(() => {
-        if (authStatus !== 'authenticated') return;
-        const socket = io(SERVER_URL, { transports: ["websocket"] });
+    // 2. HANDLERS
+    const handleLogin = async () => {
+        if (!phone || phone.length < 9) return toast.error("กรุณากรอกเบอร์โทรศัพท์");
 
-        socket.on("connect", () => setConnected(true));
-        socket.on("disconnect", () => setConnected(false));
-        // ... rest of socket logic
-        socket.on("device_update", (data) => {
-            setDevices(prev => {
-                const exists = prev.find(d => d.device_id === data.device_id);
-                if (exists) {
-                    return prev.map(d => d.device_id === data.device_id
-                        ? { ...d, lat: data.lat, lng: data.lng, status: data.status, last_update: data.last_update }
-                        : d
-                    );
-                } else {
-                    return [{ device_id: data.device_id, lat: data.lat, lng: data.lng, status: data.status, last_update: data.last_update }, ...prev];
-                }
-            });
-        });
-
-        socket.on("clear_data", () => setDevices([]));
-        return () => socket.disconnect();
-    }, [authStatus]);
-
-    // Fetch credentials on load
-    useEffect(() => {
-        if (authStatus !== 'authenticated') return;
-        fetch(`${SERVER_URL}/api/admin/credentials`)
-            .then(res => res.json())
-            .then(data => {
-                const map = {};
-                (data || []).forEach(c => { map[c.device_id] = c; });
-                setCredentials(map);
-            })
-            .catch(console.error);
-    }, [authStatus]);
-
-    // Generate credential for device
-    const generateCredential = async (deviceId) => {
-        setGeneratingCode(deviceId);
+        setLoading(true);
         try {
-            const res = await fetch(`${SERVER_URL}/api/admin/credential`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ device_id: deviceId }),
+            // Check if user exists
+            const res = await fetch(`${SERVER_URL}/api/user/login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ phone_number: phone })
             });
             const data = await res.json();
-            if (data.success) {
-                setCredentials(prev => ({
-                    ...prev,
-                    [deviceId]: { code: data.code, is_registered: 0 }
-                }));
+
+            if (data.exists) {
+                // Success -> Save & Redirect
+                localStorage.setItem("user_phone", phone);
+                // Fetch first vehicle to redirect
+                const vRes = await fetch(`${SERVER_URL}/api/user/vehicles?token=${phone}`);
+                const vData = await vRes.json();
+                if (vData.length > 0) {
+                    toast.success("ยินดีต้อนรับกลับ!");
+                    router.replace(`/map?id=${vData[0].device_id}`);
+                } else {
+                    toast.error("ไม่พบรถในระบบ");
+                    setLoading(false);
+                }
+            } else {
+                // Not found -> Go to Register
+                toast("ไม่พบเบอร์นี้ในระบบ กรุณาลงทะเบียน", { icon: "📝" });
+                setStep(2);
+                setLoading(false);
             }
         } catch (err) {
             console.error(err);
+            toast.error("เชื่อมต่อ Server ไม่ได้");
+            setLoading(false);
         }
-        setGeneratingCode(null);
     };
 
-    // Logout
-    const handleLogout = async () => {
+    const handleRegister = async () => {
+        if (!regForm.code || !regForm.plate || !regForm.driver) return toast.error("กรุณากรอกข้อมูลให้ครบ");
+
+        setLoading(true);
         try {
-            await fetch(`${SERVER_URL}/api/auth/logout`, { method: 'POST' });
-            window.location.reload();
-        } catch (err) {
-            console.error("Logout failed", err);
-            window.location.reload(); // Reload anyway to clear state if possible
-        }
-    };
-
-    // Auto-Logout on Inactivity (30 mins)
-    useEffect(() => {
-        if (authStatus !== 'authenticated') return;
-
-        let timeout;
-        const resetTimer = () => {
-            clearTimeout(timeout);
-            timeout = setTimeout(() => {
-                console.log("Auto-logout due to inactivity");
-                handleLogout();
-            }, 30 * 60 * 1000); // 30 minutes
-        };
-
-        // Listeners for activity
-        window.addEventListener('mousemove', resetTimer);
-        window.addEventListener('keydown', resetTimer);
-        window.addEventListener('click', resetTimer);
-        window.addEventListener('scroll', resetTimer);
-        window.addEventListener('touchstart', resetTimer);
-
-        resetTimer(); // Start timer
-
-        return () => {
-            clearTimeout(timeout);
-            window.removeEventListener('mousemove', resetTimer);
-            window.removeEventListener('keydown', resetTimer);
-            window.removeEventListener('click', resetTimer);
-            window.removeEventListener('scroll', resetTimer);
-            window.removeEventListener('touchstart', resetTimer);
-        };
-    }, [authStatus]);
-
-    // Fetch logs when device selected
-    const openLogs = (device) => {
-        setSelectedDevice(device);
-        setLogsLoading(true);
-        fetch(`${SERVER_URL}/api/history/${device.device_id}?limit=50`)
-            .then(res => res.json())
-            .then(data => {
-                setLogs(data || []);
-                setLogsLoading(false);
-            })
-            .catch(err => {
-                console.error("Logs fetch error:", err);
-                setLogsLoading(false);
-            });
-    };
-
-    // Setup 2FA (First Time)
-    const handleSetup = async () => {
-        if (!email || !password) {
-            setAuthError('กรุณากรอก Email และรหัสผ่าน');
-            return;
-        }
-        try {
-            const res = await fetch(`${SERVER_URL}/api/auth/setup`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
+            const res = await fetch(`${SERVER_URL}/api/user/register`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    code: regForm.code.toUpperCase(),
+                    plate_number: regForm.plate,
+                    driver_name: regForm.driver,
+                    phone_number: phone
+                })
             });
             const data = await res.json();
-            if (data.qr_code) {
-                setAuthData(data); // Show QR
-                setAuthError('');
-            } else {
-                setAuthError(data.error || 'เกิดข้อผิดพลาด');
-            }
-        } catch (err) {
-            setAuthError('เชื่อมต่อ Server ไม่ได้');
-        }
-    };
 
-    // Verify 2FA & Login
-    const handleVerify = async () => {
-        setAuthError('');
-        try {
-            // For Setup flow, we just need to verify the code matches the secret generated (implementation usually requires saving first, but here we verified in backend)
-            // Actually, in our server.js, /api/auth/verify checks against DB. 
-            // So for Setup Flow: User scans QR -> enters code -> we call verify.
-
-            const res = await fetch(`${SERVER_URL}/api/auth/verify`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password, token: totpCode })
-            });
-            const data = await res.json();
             if (data.success) {
-                setAuthStatus('authenticated');
-                window.location.reload();
+                toast.success("ลงทะเบียนสำเร็จ!");
+                localStorage.setItem("user_phone", phone);
+                // Redirect
+                const deviceId = data.device_id;
+                if (deviceId) {
+                    router.replace(`/map?id=${deviceId}`);
+                } else {
+                    // Fallback fetch if API doesn't return ID directly
+                    const vRes = await fetch(`${SERVER_URL}/api/user/vehicles?token=${phone}`);
+                    const vData = await vRes.json();
+                    if (vData.length > 0) router.replace(`/map?id=${vData[0].device_id}`);
+                }
             } else {
-                setAuthError(data.error || 'รหัสไม่ถูกต้อง');
+                toast.error(data.error || "ลงทะเบียนไม่สำเร็จ");
+                setLoading(false);
             }
         } catch (err) {
-            setAuthError('เกิดข้อผิดพลาดในการเชื่อมต่อ');
+            toast.error("เกิดข้อผิดพลาด");
+            setLoading(false);
         }
     };
 
-    const getStatusConfig = (status) => STATUS_CONFIG[status] || STATUS_CONFIG['UNKNOWN'];
-
-    // Helper styles (must be declared before auth returns that use them)
-    const inputStyle = { width: '100%', padding: '12px', background: '#222', border: '1px solid #444', color: 'white', borderRadius: '8px', marginBottom: '12px', boxSizing: 'border-box' };
-    const btnStyle = { width: '100%', padding: '12px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' };
-
-    // --- AUTH UI RENDERING ---
-    if (authStatus === 'loading') return <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
-
-    if (authStatus === 'setup_required') {
+    // --- RENDER ---
+    if (loading && step === 0) {
         return (
-            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '400px', width: '90%' }}>
-                    <h1 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>🔐 ตั้งค่า Admin (ครั้งแรก)</h1>
-                    <p style={{ color: '#aaa', marginBottom: '20px' }}>กรุณาตั้ง Email และรหัสผ่านสำหรับผู้ดูแลระบบ</p>
-
-                    {!authData.qr_code ? (
-                        /* Step 1: Input Email/Pass */
-                        <>
-                            <input
-                                type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (admin@example.com)"
-                                style={inputStyle}
-                            />
-                            <input
-                                type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="ตั้งรหัสผ่าน"
-                                style={inputStyle}
-                            />
-                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
-                            <button onClick={handleSetup} style={btnStyle}>ถัดไป: สร้าง 2FA</button>
-                        </>
-                    ) : (
-                        /* Step 2: Show QR & Verify */
-                        <>
-                            <img src={authData.qr_code} alt="QR Code" style={{ borderRadius: '8px', marginBottom: '20px', display: 'block', marginLeft: 'auto', marginRight: 'auto' }} />
-                            <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: '20px' }}>ใช้แอป Authenticator สแกน</p>
-
-                            <input
-                                type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="code 6 หลัก"
-                                style={{ ...inputStyle, textAlign: 'center', fontSize: '1.2rem', letterSpacing: '4px' }}
-                            />
-                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
-                            <button onClick={handleVerify} style={{ ...btnStyle, background: '#22C55E' }}>ยืนยันและเริ่มใช้งาน</button>
-                        </>
-                    )}
-                </div>
+            <div className="h-screen flex flex-col items-center justify-center bg-white text-blue-600">
+                <Loader2 size={48} className="animate-spin mb-4" />
+                <p className="font-bold text-lg animate-pulse">กำลังเข้าสู่ระบบ...</p>
             </div>
         );
     }
-
-    if (authStatus === 'unauthenticated') {
-        return (
-            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '350px', width: '90%' }}>
-                    <h1 style={{ fontSize: '1.5rem', marginBottom: '20px' }}>🔐 เข้าสู่ระบบ</h1>
-
-                    <input
-                        type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email"
-                        style={inputStyle}
-                    />
-                    <input
-                        type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="รหัสผ่าน"
-                        style={inputStyle}
-                    />
-                    <input
-                        type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="Code 6 หลัก (2FA)"
-                        style={{ ...inputStyle, textAlign: 'center', marginBottom: '20px' }}
-                        onKeyDown={(e) => e.key === 'Enter' && handleVerify()}
-                    />
-
-                    {authError && <p style={{ color: '#EF4444', marginBottom: '20px' }}>{authError}</p>}
-
-                    <button onClick={handleVerify} style={{ ...btnStyle, background: '#3B82F6' }}>เข้าสู่ระบบ</button>
-                </div>
-            </div>
-        );
-    }
-
-
 
     return (
-        <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', fontFamily: 'system-ui, sans-serif' }}>
-            {/* Header */}
-            <header style={{ background: '#111', borderBottom: '1px solid #222', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    🛰️ GPS Tracker Dashboard
-                </h1>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem', color: connected ? '#22C55E' : '#EF4444' }}>
-                        {connected ? <Wifi size={18} /> : <WifiOff size={18} />}
-                        {connected ? "Online" : "Offline"}
+        <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+            <Toaster position="top-center" />
+
+            {/* Background Decoration */}
+            <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[30%] bg-blue-100 rounded-full blur-3xl opacity-50" />
+            <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[30%] bg-purple-100 rounded-full blur-3xl opacity-50" />
+
+            {/*  STEP 1: LOGIN (PHONE) */}
+            {step === 1 && (
+                <div className="w-full max-w-sm z-10 animate-slide-up">
+                    <div className="text-center mb-10">
+                        <div className="bg-white p-4 rounded-3xl shadow-xl inline-block mb-4">
+                            <Smartphone size={48} className="text-blue-600" />
+                        </div>
+                        <h1 className="text-3xl font-black text-gray-900 mb-2 tracking-tight">GPS Tracker</h1>
+                        <p className="text-gray-500">เข้าสู่ระบบเพื่อติดตามรถของคุณ</p>
                     </div>
-                    <Link href="/simulator" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '8px 12px', borderRadius: '8px', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                        🧪 Sim
-                    </Link>
-                    <button onClick={handleLogout} style={{ background: '#333', border: '1px solid #444', color: '#ff6b6b', padding: '8px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }} title="ออกจากระบบ">
-                        <LogOut size={18} />
+
+                    <div className="bg-white p-2 rounded-2xl shadow-lg border border-gray-100 mb-6">
+                        <input
+                            type="tel"
+                            placeholder="เบอร์โทรศัพท์ (เช่น 0812345678)"
+                            className="w-full p-4 text-xl font-bold text-center outline-none bg-transparent placeholder:font-normal placeholder:text-gray-300"
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                            autoFocus
+                        />
+                    </div>
+
+                    <button
+                        onClick={handleLogin}
+                        disabled={phone.length < 9 || (loading && step === 1)}
+                        className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-blue-200 shadow-xl active:scale-95 transition-all disabled:opacity-50 disabled:active:scale-100 flex items-center justify-center gap-2"
+                    >
+                        {loading ? <Loader2 className="animate-spin" /> : <>เข้าสู่ระบบ <ArrowRight /></>}
                     </button>
                 </div>
-            </header>
+            )}
 
-            {/* Main Content */}
-            <main style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-                {/* Stats */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '24px' }}>
-                    <StatCard icon="📡" label="อุปกรณ์ทั้งหมด" value={devices.length} color="#3B82F6" />
-                    <StatCard icon="🚨" label="แจ้งเตือน" value={devices.filter(d => d.status === 'STOLEN' || d.status === 'CRASH').length} color="#EF4444" />
-                    <StatCard icon="✅" label="ปกติ" value={devices.filter(d => d.status === 'NORMAL').length} color="#22C55E" />
-                </div>
+            {/* STEP 2: REGISTER (CREDENTIAL) */}
+            {step === 2 && (
+                <div className="w-full max-w-sm z-10 animate-slide-up">
+                    <button onClick={() => setStep(1)} className="text-sm text-gray-400 mb-6 flex items-center gap-1">
+                        ← กลับ
+                    </button>
 
-                {/* Devices Table */}
-                <div style={{ background: '#111', borderRadius: '12px', overflow: 'hidden', border: '1px solid #222' }}>
-                    <div style={{ padding: '16px 20px', borderBottom: '1px solid #222', fontWeight: 'bold', fontSize: '1rem' }}>
-                        📋 รายการอุปกรณ์
-                    </div>
+                    <h2 className="text-2xl font-bold text-gray-900 mb-2">ลงทะเบียนใหม่ ✨</h2>
+                    <p className="text-gray-500 mb-8">กรอกรหัสจากข้างกล่องอุปกรณ์ GPS</p>
 
-                    {devices.length === 0 ? (
-                        <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
-                            <Car size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
-                            <p>ยังไม่มีอุปกรณ์</p>
-                            <p style={{ fontSize: '0.875rem' }}>รอรับข้อมูลจาก ESP32...</p>
+                    <div className="space-y-4">
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
+                            <Key className="text-orange-500" />
+                            <input
+                                className="flex-1 outline-none font-mono font-bold uppercase text-lg placeholder:normal-case placeholder:font-sans placeholder:text-sm"
+                                placeholder="Credential Code (Ex. A1B2C3)"
+                                value={regForm.code}
+                                onChange={(e) => setRegForm({ ...regForm, code: e.target.value })}
+                            />
                         </div>
-                    ) : (
-                        <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <thead>
-                                    <tr style={{ background: '#1a1a1a', fontSize: '0.75rem', textTransform: 'uppercase', color: '#888' }}>
-                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>MAC Address</th>
-                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>สถานะ</th>
-                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>พิกัด</th>
-                                        <th style={{ padding: '12px 16px', textAlign: 'left' }}>อัพเดทล่าสุด</th>
-                                        <th style={{ padding: '12px 16px', textAlign: 'center' }}>Credential</th>
-                                        <th style={{ padding: '12px 16px', textAlign: 'center' }}>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {devices.map((device, idx) => {
-                                        const cfg = getStatusConfig(device.status);
-                                        const cred = credentials[device.device_id];
-                                        return (
-                                            <tr key={device.device_id} style={{ borderBottom: '1px solid #222', cursor: 'pointer' }} onClick={() => openLogs(device)}>
-                                                <td style={{ padding: '14px 16px', fontFamily: 'monospace', fontSize: '0.9rem' }}>
-                                                    {device.device_id}
-                                                </td>
-                                                <td style={{ padding: '14px 16px' }}>
-                                                    <span style={{ display: 'inline-block', padding: '4px 10px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 'bold', background: cfg.bg, color: cfg.color }}>
-                                                        {cfg.label}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: '14px 16px', fontSize: '0.85rem', color: '#aaa' }}>
-                                                    {device.lat?.toFixed(5)}, {device.lng?.toFixed(5)}
-                                                </td>
-                                                <td style={{ padding: '14px 16px', fontSize: '0.85rem', color: '#888' }}>
-                                                    {device.last_update ? new Date(device.last_update).toLocaleString('th-TH', {
-                                                        timeZone: 'Asia/Bangkok',
-                                                        day: '2-digit',
-                                                        month: '2-digit',
-                                                        year: 'numeric',
-                                                        hour: '2-digit',
-                                                        minute: '2-digit',
-                                                        second: '2-digit'
-                                                    }) : '-'}
-                                                </td>
-                                                <td style={{ padding: '14px 16px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                                                    {cred ? (
-                                                        <span style={{
-                                                            fontFamily: 'monospace',
-                                                            fontSize: '0.9rem',
-                                                            fontWeight: 'bold',
-                                                            color: cred.is_registered ? '#22C55E' : '#FBBF24',
-                                                            background: cred.is_registered ? '#052e16' : '#422006',
-                                                            padding: '4px 10px',
-                                                            borderRadius: '6px',
-                                                        }}>
-                                                            {cred.code} {cred.is_registered ? '✅' : '⏳'}
-                                                        </span>
-                                                    ) : (
-                                                        <button
-                                                            onClick={() => generateCredential(device.device_id)}
-                                                            disabled={generatingCode === device.device_id}
-                                                            style={{
-                                                                background: '#8B5CF6',
-                                                                color: 'white',
-                                                                border: 'none',
-                                                                padding: '6px 12px',
-                                                                borderRadius: '6px',
-                                                                cursor: 'pointer',
-                                                                fontSize: '0.75rem',
-                                                                opacity: generatingCode === device.device_id ? 0.5 : 1,
-                                                            }}
-                                                        >
-                                                            {generatingCode === device.device_id ? '...' : '🔑 สร้างรหัส'}
-                                                        </button>
-                                                    )}
-                                                </td>
-                                                <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                                                    <Link href={`/map?id=${encodeURIComponent(device.device_id)}`} onClick={(e) => e.stopPropagation()}>
-                                                        <button style={{ background: '#3B82F6', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                                                            🗺️ Map
-                                                        </button>
-                                                    </Link>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-                </div>
-            </main>
 
-            {/* Logs Modal */}
-            {selectedDevice && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setSelectedDevice(null)}>
-                    <div style={{ background: '#111', borderRadius: '16px', width: '100%', maxWidth: '600px', maxHeight: '80vh', overflow: 'hidden', border: '1px solid #333' }} onClick={(e) => e.stopPropagation()}>
-                        <div style={{ padding: '16px 20px', borderBottom: '1px solid #222', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h2 style={{ margin: 0, fontSize: '1rem' }}>📜 Log: {selectedDevice.device_id}</h2>
-                            <button onClick={() => setSelectedDevice(null)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}>
-                                <X size={24} />
-                            </button>
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
+                            <Car className="text-blue-500" />
+                            <input
+                                className="flex-1 outline-none font-bold text-lg placeholder:font-normal placeholder:text-sm"
+                                placeholder="เลขทะเบียนรถ (เช่น กก-1234)"
+                                value={regForm.plate}
+                                onChange={(e) => setRegForm({ ...regForm, plate: e.target.value })}
+                            />
                         </div>
-                        <div style={{ maxHeight: '60vh', overflow: 'auto', padding: '12px' }}>
-                            {logsLoading ? (
-                                <p style={{ textAlign: 'center', color: '#888', padding: '20px' }}>กำลังโหลด...</p>
-                            ) : logs.length === 0 ? (
-                                <p style={{ textAlign: 'center', color: '#888', padding: '20px' }}>ไม่มีประวัติ</p>
-                            ) : (
-                                logs.map((log, idx) => (
-                                    <div key={log.id || idx} style={{ padding: '10px 12px', background: '#1a1a1a', borderRadius: '8px', marginBottom: '8px', fontSize: '0.85rem' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                            <span style={{ color: getStatusConfig(log.status).color, fontWeight: 'bold' }}>{getStatusConfig(log.status).label}</span>
-                                            <span style={{ color: '#666' }}>
-                                                {new Date(log.timestamp).toLocaleString('th-TH', {
-                                                    timeZone: 'Asia/Bangkok',
-                                                    day: '2-digit',
-                                                    month: '2-digit',
-                                                    year: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit',
-                                                    second: '2-digit'
-                                                })}
-                                            </span>
-                                        </div>
-                                        <div style={{ color: '#aaa' }}>📍 {log.lat?.toFixed(5)}, {log.lng?.toFixed(5)}</div>
-                                    </div>
-                                ))
-                            )}
+
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
+                            <Smartphone className="text-gray-400" />
+                            <input
+                                className="flex-1 outline-none font-medium placeholder:text-sm"
+                                placeholder="ชื่อผู้ขับขี่"
+                                value={regForm.driver}
+                                onChange={(e) => setRegForm({ ...regForm, driver: e.target.value })}
+                            />
                         </div>
-                        <div style={{ padding: '12px 20px', borderTop: '1px solid #222' }}>
-                            <Link href={`/map?id=${encodeURIComponent(selectedDevice.device_id)}`}>
-                                <button style={{ width: '100%', background: '#4ECDC4', color: 'black', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>
-                                    🗺️ เปิดแผนที่
-                                </button>
-                            </Link>
-                        </div>
+
+                        <button
+                            onClick={handleRegister}
+                            disabled={loading && step === 2}
+                            className="w-full bg-black text-white py-4 rounded-2xl font-bold text-lg shadow-xl mt-4 active:scale-95 transition-all flex items-center justify-center gap-2"
+                        >
+                            {loading ? <Loader2 className="animate-spin" /> : "ลงทะเบียนและเริ่มใช้งาน"}
+                        </button>
                     </div>
                 </div>
             )}
-        </div>
-    );
-}
 
-function StatCard({ icon, label, value, color }) {
-    return (
-        <div style={{ background: '#111', border: '1px solid #222', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: '1.5rem', marginBottom: '4px' }}>{icon}</div>
-            <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color }}>{value}</div>
-            <div style={{ fontSize: '0.75rem', color: '#888' }}>{label}</div>
+            {/* Footer */}
+            <div className="absolute bottom-6 text-center w-full">
+                <p className="text-xs text-gray-300">GPS Tracker System v1.0</p>
+            </div>
         </div>
     );
 }
