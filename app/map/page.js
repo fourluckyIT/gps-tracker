@@ -252,19 +252,22 @@ function MapContent() {
 
     // Auto-Safe: If Stolen & No Data for 15s -> Normal
     // Auto-Safe: If Stolen & No Data for 15s -> Normal
-    // useEffect(() => {
-    //     if (!isStolen) return;
-    //     const timer = setTimeout(() => {
-    //         setCarStatus('NORMAL');
-    //         toast.success("🚗 รถปลอดภัยแล้ว (ไม่พบการเคลื่อนไหว)", { icon: '✅', duration: 4000 });
-    //         fetch(`${SERVER_URL}/api/device/${deviceId}/status`, {
-    //             method: 'POST',
-    //             headers: { 'Content-Type': 'application/json' },
-    //             body: JSON.stringify({ status: 'NORMAL' })
-    //         }).catch(console.error);
-    //     }, 15000);
-    //     return () => clearTimeout(timer);
-    // }, [carStatus, carPosition, deviceId, isStolen]); // carPosition updates on every packet
+    useEffect(() => {
+        if (!isStolen) return;
+
+        const timer = setTimeout(() => {
+            setCarStatus('NORMAL');
+            toast.success("🚗 รถปลอดภัยแล้ว (ไม่พบการเคลื่อนไหว)", { icon: '✅', duration: 4000 });
+
+            fetch(`${SERVER_URL}/api/device/${deviceId}/status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'NORMAL' })
+            }).catch(console.error);
+        }, 15000);
+
+        return () => clearTimeout(timer);
+    }, [carStatus, carPosition, deviceId, isStolen]); // carPosition updates on every packet
 
 
 
