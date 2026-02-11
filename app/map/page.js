@@ -251,22 +251,21 @@ function MapContent() {
     }, [carInGeofence]);
 
     // Auto-Safe: If Stolen & No Data for 15s -> Normal
-    useEffect(() => {
-        if (!isStolen) return;
+    // Auto-Safe: If Stolen & No Data for 15s -> Normal
+    // useEffect(() => {
+    //     if (!isStolen) return;
+    //     const timer = setTimeout(() => {
+    //         setCarStatus('NORMAL');
+    //         toast.success("🚗 รถปลอดภัยแล้ว (ไม่พบการเคลื่อนไหว)", { icon: '✅', duration: 4000 });
+    //         fetch(`${SERVER_URL}/api/device/${deviceId}/status`, {
+    //             method: 'POST',
+    //             headers: { 'Content-Type': 'application/json' },
+    //             body: JSON.stringify({ status: 'NORMAL' })
+    //         }).catch(console.error);
+    //     }, 15000);
+    //     return () => clearTimeout(timer);
+    // }, [carStatus, carPosition, deviceId, isStolen]); // carPosition updates on every packet
 
-        const timer = setTimeout(() => {
-            setCarStatus('NORMAL');
-            toast.success("🚗 รถปลอดภัยแล้ว (ไม่พบการเคลื่อนไหว)", { icon: '✅', duration: 4000 });
-
-            fetch(`${SERVER_URL}/api/device/${deviceId}/status`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: 'NORMAL' })
-            }).catch(console.error);
-        }, 15000);
-
-        return () => clearTimeout(timer);
-    }, [carStatus, carPosition, deviceId, isStolen]); // carPosition updates on every packet
 
 
 
@@ -442,7 +441,7 @@ function MapContent() {
                                 background: isStolen ? '#fee2e2' : isCrash ? '#ffedd5' : '#e0f2f1',
                                 color: isStolen ? '#ef4444' : isCrash ? '#f97316' : '#0d9488'
                             }}>
-                                {isStolen ? <ShieldAlert size={14} fill={statusColor} /> : isCrash ? <AlertTriangle size={14} fill={statusColor} /> : <Shield size={14} fill={statusColor} />}
+                                {isStolen ? <ShieldAlert size={14} color={statusColor} /> : isCrash ? <AlertTriangle size={14} color={statusColor} /> : <Shield size={14} color={statusColor} />}
                                 {statusLabel}
                             </div>
                             <div className={styles.lastUpdate}>
