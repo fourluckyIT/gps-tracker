@@ -592,3 +592,11 @@ function MapContent() {
         </div>
     );
 }
+
+export default function MapPage() {
+    return (
+        <Suspense fallback={<div className={styles.loadingScreen}>กำลังโหลด...</div>}>
+            <MapContent />
+        </Suspense>
+    );
+}
