@@ -720,6 +720,37 @@ nextApp.prepare().then(() => {
         });
     });
 
+    // 🚦 Update device status manually (Auto-Safe or Admin)
+    app.post('/api/device/:id/status', (req, res) => {
+        const { status } = req.body;
+        if (!status) return res.status(400).json({ error: "Status required" });
+
+        const eventTime = new Date().toISOString();
+
+        // Get current lat/lng to emit
+        db.get("SELECT lat, lng FROM devices WHERE device_id = ?", [req.params.id], (err, row) => {
+            const lat = row ? row.lat : 0;
+            const lng = row ? row.lng : 0;
+
+            db.run("UPDATE devices SET status = ?, last_update = ? WHERE device_id = ?",
+                [status, eventTime, req.params.id], function (err) {
+                    if (err) return res.status(500).json({ error: err.message });
+
+                    // Log it
+                    db.run("INSERT INTO logs (device_id, lat, lng, status, raw_data, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                        [req.params.id, lat, lng, status, `Manual Update: ${status}`, eventTime]);
+
+                    io.emit('device_update', {
+                        device_id: req.params.id,
+                        lat, lng, status,
+                        last_update: eventTime,
+                        manual_update: true
+                    });
+                    res.json({ success: true });
+                });
+        });
+    });
+
     // Next.js handler
     app.all(/(.*)/, (req, res) => handle(req, res));
 
