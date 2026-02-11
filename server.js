@@ -19,8 +19,8 @@ const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } 
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(bodyParser.text({ type: 'text/*' }));
 app.use(bodyParser.json());
+app.use(bodyParser.text({ type: 'text/*' }));
 app.use(cookieParser());
 
 const crypto = require('crypto');
@@ -79,6 +79,7 @@ app.get('/api/auth/status', (req, res) => {
 
 // Setup 2FA (Email + Password + Generate Secret)
 app.post('/api/auth/setup', (req, res) => {
+    if (!req.body) return res.status(400).json({ error: "Missing body" });
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email and Password required" });
 
