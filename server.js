@@ -41,7 +41,9 @@ const requireAuth = (req, res, next) => {
         '/api/user/vehicles' // App list vehicles
     ];
 
-    if (publicPaths.includes(req.path)) return next();
+    // Use originalUrl because app.use('/api') strips the prefix from req.path
+    const pathToCheck = req.originalUrl.split('?')[0];
+    if (publicPaths.includes(pathToCheck)) return next();
 
     // Check cookie
     const token = req.cookies.admin_token;
