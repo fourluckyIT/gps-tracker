@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { io } from "socket.io-client";
-import { MapPin, Clock, AlertTriangle, Car, ChevronRight, X, Wifi, WifiOff } from "lucide-react";
+import { MapPin, Clock, AlertTriangle, Car, ChevronRight, X, Wifi, WifiOff, LogOut } from "lucide-react";
 
 const SERVER_URL = typeof window !== 'undefined' ? window.location.origin : "http://localhost:3000";
 
@@ -123,6 +123,49 @@ export default function Dashboard() {
         }
         setGeneratingCode(null);
     };
+
+    // Logout
+    const handleLogout = async () => {
+        try {
+            await fetch(`${SERVER_URL}/api/auth/logout`, { method: 'POST' });
+            window.location.reload();
+        } catch (err) {
+            console.error("Logout failed", err);
+            window.location.reload(); // Reload anyway to clear state if possible
+        }
+    };
+
+    // Auto-Logout on Inactivity (30 mins)
+    useEffect(() => {
+        if (authStatus !== 'authenticated') return;
+
+        let timeout;
+        const resetTimer = () => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                console.log("Auto-logout due to inactivity");
+                handleLogout();
+            }, 30 * 60 * 1000); // 30 minutes
+        };
+
+        // Listeners for activity
+        window.addEventListener('mousemove', resetTimer);
+        window.addEventListener('keydown', resetTimer);
+        window.addEventListener('click', resetTimer);
+        window.addEventListener('scroll', resetTimer);
+        window.addEventListener('touchstart', resetTimer);
+
+        resetTimer(); // Start timer
+
+        return () => {
+            clearTimeout(timeout);
+            window.removeEventListener('mousemove', resetTimer);
+            window.removeEventListener('keydown', resetTimer);
+            window.removeEventListener('click', resetTimer);
+            window.removeEventListener('scroll', resetTimer);
+            window.removeEventListener('touchstart', resetTimer);
+        };
+    }, [authStatus]);
 
     // Fetch logs when device selected
     const openLogs = (device) => {
@@ -276,13 +319,16 @@ export default function Dashboard() {
                     🛰️ GPS Tracker Dashboard
                 </h1>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <Link href="/simulator" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '8px 16px', borderRadius: '8px', textDecoration: 'none', fontSize: '0.85rem', fontWeight: 'bold' }}>
-                        🧪 Simulator
-                    </Link>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem', color: connected ? '#22C55E' : '#EF4444' }}>
                         {connected ? <Wifi size={18} /> : <WifiOff size={18} />}
-                        {connected ? "Connected" : "Disconnected"}
+                        {connected ? "Online" : "Offline"}
                     </div>
+                    <Link href="/simulator" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '8px 12px', borderRadius: '8px', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                        🧪 Sim
+                    </Link>
+                    <button onClick={handleLogout} style={{ background: '#333', border: '1px solid #444', color: '#ff6b6b', padding: '8px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }} title="ออกจากระบบ">
+                        <LogOut size={18} />
+                    </button>
                 </div>
             </header>
 
