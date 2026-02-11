@@ -144,7 +144,7 @@ export default function MobileLogin() {
                 <div className="w-full max-w-sm z-10 animate-slide-up">
                     <div className="text-center mb-10">
                         <div className="bg-white p-4 rounded-3xl shadow-xl inline-block mb-4">
-                            <Smartphone size={48} className="text-blue-600" />
+                            <Image src="/logo.png" width={80} height={80} alt="Logo" className="object-contain" />
                         </div>
                         <h1 className="text-3xl font-black text-gray-900 mb-2 tracking-tight">GPS Tracker</h1>
                         <p className="text-gray-500">เข้าสู่ระบบเพื่อติดตามรถของคุณ</p>
