@@ -3,6 +3,12 @@ import "./globals.css";
 export const metadata = {
   title: "GPS Tracker",
   description: "Real-time GPS Vehicle Tracking System",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 export const viewport = {
