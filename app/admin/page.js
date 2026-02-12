@@ -23,15 +23,20 @@ export default function Dashboard() {
     const [credentials, setCredentials] = useState({});
     const [generatingCode, setGeneratingCode] = useState(null);
 
-    // 2FA State
+    // Auth State
     const [authStatus, setAuthStatus] = useState('loading'); // loading, authenticated, unauthenticated, setup_required
-    const [authData, setAuthData] = useState({ secret: '', qr_code: '' });
-    const [totpCode, setTotpCode] = useState('');
+    const [userRole, setUserRole] = useState('');
     const [authError, setAuthError] = useState('');
 
-    // New: Email/Password State
-    const [email, setEmail] = useState('');
+    // Login Form State
+    const [phone, setPhone] = useState('');
     const [password, setPassword] = useState('');
+
+    // Admin Management State
+    const [admins, setAdmins] = useState([]);
+    const [newAdminPhone, setNewAdminPhone] = useState('');
+    const [newAdminPass, setNewAdminPass] = useState('');
+    const [showAdminPanel, setShowAdminPanel] = useState(false);
 
     // Check Auth Status on Load
     useEffect(() => {
@@ -41,8 +46,11 @@ export default function Dashboard() {
                 const data = await res.json();
                 if (data.authenticated) {
                     setAuthStatus('authenticated');
-                } else if (!data.enabled) {
+                    setUserRole(data.role || '');
+                    if (data.role === 'SUPER_ADMIN') fetchAdmins();
+                } else if (data.needsSetup) {
                     setAuthStatus('setup_required');
+                    setPhone('0634969565'); // Pre-fill Super Admin
                 } else {
                     setAuthStatus('unauthenticated');
                 }
@@ -54,7 +62,7 @@ export default function Dashboard() {
         checkAuth();
     }, []);
 
-    // Fetch initial devices (Only if authenticated - handled by conditionals later, but fetch will fail/auth error if not)
+    // Fetch initial devices
     useEffect(() => {
         if (authStatus !== 'authenticated') return;
         fetch(`${SERVER_URL}/api/devices`)
@@ -63,14 +71,14 @@ export default function Dashboard() {
             .catch(err => console.error("Fetch error:", err));
     }, [authStatus]);
 
-    // WebSocket for real-time updates
+    // WebSocket
     useEffect(() => {
         if (authStatus !== 'authenticated') return;
         const socket = io(SERVER_URL, { transports: ["websocket"] });
 
         socket.on("connect", () => setConnected(true));
         socket.on("disconnect", () => setConnected(false));
-        // ... rest of socket logic
+
         socket.on("device_update", (data) => {
             setDevices(prev => {
                 const exists = prev.find(d => d.device_id === data.device_id);
@@ -89,7 +97,7 @@ export default function Dashboard() {
         return () => socket.disconnect();
     }, [authStatus]);
 
-    // Fetch credentials on load
+    // Fetch credentials
     useEffect(() => {
         if (authStatus !== 'authenticated') return;
         fetch(`${SERVER_URL}/api/admin/credentials`)
@@ -102,7 +110,14 @@ export default function Dashboard() {
             .catch(console.error);
     }, [authStatus]);
 
-    // Generate credential for device
+    const fetchAdmins = () => {
+        fetch(`${SERVER_URL}/api/admin/users`)
+            .then(res => res.json())
+            .then(data => setAdmins(data || []))
+            .catch(console.error);
+    };
+
+    // Generate credential
     const generateCredential = async (deviceId) => {
         setGeneratingCode(deviceId);
         try {
@@ -130,44 +145,29 @@ export default function Dashboard() {
             await fetch(`${SERVER_URL}/api/auth/logout`, { method: 'POST' });
             window.location.reload();
         } catch (err) {
-            console.error("Logout failed", err);
-            window.location.reload(); // Reload anyway to clear state if possible
+            window.location.reload();
         }
     };
 
-    // Auto-Logout on Inactivity (30 mins)
+    // Auto-Logout
     useEffect(() => {
         if (authStatus !== 'authenticated') return;
-
         let timeout;
         const resetTimer = () => {
             clearTimeout(timeout);
             timeout = setTimeout(() => {
-                console.log("Auto-logout due to inactivity");
                 handleLogout();
-            }, 30 * 60 * 1000); // 30 minutes
+            }, 30 * 60 * 1000);
         };
-
-        // Listeners for activity
         window.addEventListener('mousemove', resetTimer);
         window.addEventListener('keydown', resetTimer);
-        window.addEventListener('click', resetTimer);
-        window.addEventListener('scroll', resetTimer);
-        window.addEventListener('touchstart', resetTimer);
-
-        resetTimer(); // Start timer
-
         return () => {
             clearTimeout(timeout);
             window.removeEventListener('mousemove', resetTimer);
             window.removeEventListener('keydown', resetTimer);
-            window.removeEventListener('click', resetTimer);
-            window.removeEventListener('scroll', resetTimer);
-            window.removeEventListener('touchstart', resetTimer);
         };
     }, [authStatus]);
 
-    // Fetch logs when device selected
     const openLogs = (device) => {
         setSelectedDevice(device);
         setLogsLoading(true);
@@ -177,164 +177,187 @@ export default function Dashboard() {
                 setLogs(data || []);
                 setLogsLoading(false);
             })
-            .catch(err => {
-                console.error("Logs fetch error:", err);
-                setLogsLoading(false);
-            });
+            .catch(err => setLogsLoading(false));
     };
 
-    // Setup 2FA (First Time)
-    const handleSetup = async () => {
-        if (!email || !password) {
-            setAuthError('กรุณากรอก Email และรหัสผ่าน');
+    // Login / Setup
+    const handleLogin = async (isSetup = false) => {
+        setAuthError('');
+        if (!phone || !password) {
+            setAuthError('กรุณากรอกข้อมูลให้ครบถ้วน');
             return;
         }
+
         try {
-            const res = await fetch(`${SERVER_URL}/api/auth/setup`, {
+            const res = await fetch(`${SERVER_URL}/api/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
+                body: JSON.stringify({ phone, password, is_setup: isSetup })
             });
             const data = await res.json();
-            if (data.qr_code) {
-                setAuthData(data); // Show QR
-                setAuthError('');
+            if (data.success) {
+                setAuthStatus('authenticated');
+                setUserRole(data.role);
+                // Reload isn't strictly necessary if state updates, but good for clean slate
+                window.location.reload();
             } else {
-                setAuthError(data.error || 'เกิดข้อผิดพลาด');
+                setAuthError(data.error || 'เข้าสู่ระบบไม่สำเร็จ');
             }
         } catch (err) {
             setAuthError('เชื่อมต่อ Server ไม่ได้');
         }
     };
 
-    // Verify 2FA & Login
-    const handleVerify = async () => {
-        setAuthError('');
+    // Add Admin (Super Admin Only)
+    const handleAddAdmin = async () => {
+        if (!newAdminPhone || !newAdminPass) return;
         try {
-            // For Setup flow, we just need to verify the code matches the secret generated (implementation usually requires saving first, but here we verified in backend)
-            // Actually, in our server.js, /api/auth/verify checks against DB. 
-            // So for Setup Flow: User scans QR -> enters code -> we call verify.
-
-            const res = await fetch(`${SERVER_URL}/api/auth/verify`, {
+            const res = await fetch(`${SERVER_URL}/api/admin/users`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password, token: totpCode })
+                body: JSON.stringify({ phone: newAdminPhone, password: newAdminPass, role: 'ADMIN' })
             });
-            const data = await res.json();
-            if (data.success) {
-                setAuthStatus('authenticated');
-                window.location.reload();
+            if (res.ok) {
+                setNewAdminPhone('');
+                setNewAdminPass('');
+                fetchAdmins();
+                alert('เพิ่มแอดมินสำเร็จ');
             } else {
-                setAuthError(data.error || 'รหัสไม่ถูกต้อง');
+                alert('เกิดข้อผิดพลาด (เบอร์ซ้ำ?)');
             }
-        } catch (err) {
-            setAuthError('เกิดข้อผิดพลาดในการเชื่อมต่อ');
-        }
+        } catch (e) { console.error(e); }
+    };
+
+    const handleDeleteAdmin = async (id) => {
+        if (!confirm('ยืนยันการลบ?')) return;
+        try {
+            const res = await fetch(`${SERVER_URL}/api/admin/users/${id}`, { method: 'DELETE' });
+            if (res.ok) fetchAdmins();
+            else alert('ลบไม่สำเร็จ');
+        } catch (e) { console.error(e); }
     };
 
     const getStatusConfig = (status) => STATUS_CONFIG[status] || STATUS_CONFIG['UNKNOWN'];
 
-    // Helper styles (must be declared before auth returns that use them)
+    // Styles
     const inputStyle = { width: '100%', padding: '12px', background: '#222', border: '1px solid #444', color: 'white', borderRadius: '8px', marginBottom: '12px', boxSizing: 'border-box' };
     const btnStyle = { width: '100%', padding: '12px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' };
 
-    // --- AUTH UI RENDERING ---
+    // --- RENDER ---
+
     if (authStatus === 'loading') return <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
 
+    // 1. Initial Setup for Super Admin
     if (authStatus === 'setup_required') {
         return (
-            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
                 <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '400px', width: '90%' }}>
-                    <h1 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>🔐 ตั้งค่า Admin (ครั้งแรก)</h1>
-                    <p style={{ color: '#aaa', marginBottom: '20px' }}>กรุณาตั้ง Email และรหัสผ่านสำหรับผู้ดูแลระบบ</p>
+                    <h1 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>👑 ตั้งค่า Super Admin</h1>
+                    <p style={{ color: '#aaa', marginBottom: '20px' }}>กำหนดรหัสผ่านสำหรับเบอร์ 0634969565</p>
 
-                    {!authData.qr_code ? (
-                        /* Step 1: Input Email/Pass */
-                        <>
-                            <input
-                                type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (admin@example.com)"
-                                style={inputStyle}
-                            />
-                            <input
-                                type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="ตั้งรหัสผ่าน"
-                                style={inputStyle}
-                            />
-                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
-                            <button onClick={handleSetup} style={btnStyle}>ถัดไป: สร้าง 2FA</button>
-                        </>
-                    ) : (
-                        /* Step 2: Show QR & Verify */
-                        <>
-                            <img src={authData.qr_code} alt="QR Code" style={{ borderRadius: '8px', marginBottom: '20px', display: 'block', marginLeft: 'auto', marginRight: 'auto' }} />
-                            <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: '20px' }}>ใช้แอป Authenticator สแกน</p>
-
-                            <input
-                                type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="code 6 หลัก"
-                                style={{ ...inputStyle, textAlign: 'center', fontSize: '1.2rem', letterSpacing: '4px' }}
-                            />
-                            {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
-                            <button onClick={handleVerify} style={{ ...btnStyle, background: '#22C55E' }}>ยืนยันและเริ่มใช้งาน</button>
-                        </>
-                    )}
+                    <input type="text" value={phone} disabled style={{ ...inputStyle, opacity: 0.5, cursor: 'not-allowed' }} />
+                    <input
+                        type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                        placeholder="ตั้งรหัสผ่านใหม่" style={inputStyle}
+                    />
+                    {authError && <p style={{ color: '#EF4444', marginBottom: '10px' }}>{authError}</p>}
+                    <button onClick={() => handleLogin(true)} style={btnStyle}>บันทึกและเริ่มต้นใช้งาน</button>
                 </div>
             </div>
         );
     }
 
+    // 2. Login Screen
     if (authStatus === 'unauthenticated') {
         return (
-            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ background: '#111', padding: '40px', borderRadius: '12px', border: '1px solid #333', textAlign: 'center', maxWidth: '350px', width: '90%' }}>
-                    <h1 style={{ fontSize: '1.5rem', marginBottom: '20px' }}>🔐 เข้าสู่ระบบ</h1>
-
+                    <h1 style={{ fontSize: '1.5rem', marginBottom: '20px' }}>🔐 เข้าสู่ระบบ (Admin)</h1>
                     <input
-                        type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email"
-                        style={inputStyle}
+                        type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+                        placeholder="เบอร์โทรศัพท์" style={inputStyle}
                     />
                     <input
-                        type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="รหัสผ่าน"
-                        style={inputStyle}
+                        type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                        placeholder="รหัสผ่าน" style={inputStyle}
+                        onKeyDown={(e) => e.key === 'Enter' && handleLogin(false)}
                     />
-                    <input
-                        type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="Code 6 หลัก (2FA)"
-                        style={{ ...inputStyle, textAlign: 'center', marginBottom: '20px' }}
-                        onKeyDown={(e) => e.key === 'Enter' && handleVerify()}
-                    />
-
                     {authError && <p style={{ color: '#EF4444', marginBottom: '20px' }}>{authError}</p>}
-
-                    <button onClick={handleVerify} style={{ ...btnStyle, background: '#3B82F6' }}>เข้าสู่ระบบ</button>
+                    <button onClick={() => handleLogin(false)} style={btnStyle}>เข้าสู่ระบบ</button>
                 </div>
             </div>
         );
     }
 
-
-
+    // 3. Dashboard
     return (
         <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', fontFamily: 'system-ui, sans-serif' }}>
-            {/* Header */}
             <header style={{ background: '#111', borderBottom: '1px solid #222', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    🛰️ GPS Tracker Dashboard
-                </h1>
+                <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>🛰️ GPS Admin {userRole === 'SUPER_ADMIN' && <span style={{ fontSize: '0.8rem', background: '#F59E0B', color: 'black', padding: '2px 6px', borderRadius: '4px', marginLeft: '8px' }}>SUPER</span>}</h1>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem', color: connected ? '#22C55E' : '#EF4444' }}>
-                        {connected ? <Wifi size={18} /> : <WifiOff size={18} />}
-                        {connected ? "Online" : "Offline"}
-                    </div>
-                    <Link href="/simulator" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '8px 12px', borderRadius: '8px', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                        🧪 Sim
-                    </Link>
-                    <button onClick={handleLogout} style={{ background: '#333', border: '1px solid #444', color: '#ff6b6b', padding: '8px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }} title="ออกจากระบบ">
+                    <div style={{ fontSize: '0.875rem', color: connected ? '#22C55E' : '#EF4444' }}>{connected ? "Online" : "Offline"}</div>
+
+                    {userRole === 'SUPER_ADMIN' && (
+                        <button onClick={() => setShowAdminPanel(!showAdminPanel)} style={{ background: '#333', color: 'white', border: '1px solid #444', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer' }}>
+                            👥 จัดการแอดมิน
+                        </button>
+                    )}
+
+                    <button onClick={handleLogout} style={{ background: '#333', border: '1px solid #444', color: '#ff6b6b', padding: '8px', borderRadius: '8px', cursor: 'pointer' }}>
                         <LogOut size={18} />
                     </button>
                 </div>
             </header>
 
-            {/* Main Content */}
             <main style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-                {/* Stats */}
+
+                {/* Admin Management Panel */}
+                {showAdminPanel && userRole === 'SUPER_ADMIN' && (
+                    <div style={{ marginBottom: '24px', padding: '20px', background: '#1a1a1a', borderRadius: '12px', border: '1px solid #333' }}>
+                        <h2 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>👥 จัดการผู้ดูแลระบบ</h2>
+                        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+                            <input
+                                type="tel" placeholder="เบอร์โทรศัพท์" value={newAdminPhone} onChange={e => setNewAdminPhone(e.target.value)}
+                                style={{ ...inputStyle, marginBottom: 0, width: '200px' }}
+                            />
+                            <input
+                                type="password" placeholder="รหัสผ่าน" value={newAdminPass} onChange={e => setNewAdminPass(e.target.value)}
+                                style={{ ...inputStyle, marginBottom: 0, width: '200px' }}
+                            />
+                            <button onClick={handleAddAdmin} style={{ ...btnStyle, width: 'auto', padding: '0 20px', background: '#10B981' }}>เพิ่ม</button>
+                        </div>
+                        <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ borderBottom: '1px solid #333', color: '#888' }}>
+                                    <th style={{ padding: '8px' }}>เบอร์โทรศัพท์</th>
+                                    <th style={{ padding: '8px' }}>Role</th>
+                                    <th style={{ padding: '8px' }}>วันที่สร้าง</th>
+                                    <th style={{ padding: '8px' }}>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {admins.map(admin => (
+                                    <tr key={admin.id} style={{ borderBottom: '1px solid #222' }}>
+                                        <td style={{ padding: '12px 8px' }}>{admin.phone_number}</td>
+                                        <td style={{ padding: '12px 8px' }}>
+                                            <span style={{ fontSize: '0.8rem', padding: '2px 8px', borderRadius: '12px', background: admin.role === 'SUPER_ADMIN' ? '#F59E0B' : '#3B82F6', color: admin.role === 'SUPER_ADMIN' ? 'black' : 'white' }}>
+                                                {admin.role}
+                                            </span>
+                                        </td>
+                                        <td style={{ padding: '12px 8px', color: '#888', fontSize: '0.9rem' }}>{new Date(admin.created_at).toLocaleDateString('th-TH')}</td>
+                                        <td style={{ padding: '12px 8px' }}>
+                                            {admin.role !== 'SUPER_ADMIN' && (
+                                                <button onClick={() => handleDeleteAdmin(admin.id)} style={{ color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer' }}>ลบ</button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* Stats & Devices (Same as before) */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '24px' }}>
                     <StatCard icon="📡" label="อุปกรณ์ทั้งหมด" value={devices.length} color="#3B82F6" />
                     <StatCard icon="🚨" label="แจ้งเตือน" value={devices.filter(d => d.status === 'STOLEN' || d.status === 'CRASH').length} color="#EF4444" />
@@ -343,6 +366,7 @@ export default function Dashboard() {
 
                 {/* Devices Table */}
                 <div style={{ background: '#111', borderRadius: '12px', overflow: 'hidden', border: '1px solid #222' }}>
+                    {/* ... (Existing Table Logic) ... */}
                     <div style={{ padding: '16px 20px', borderBottom: '1px solid #222', fontWeight: 'bold', fontSize: '1rem' }}>
                         📋 รายการอุปกรณ์
                     </div>
@@ -351,7 +375,6 @@ export default function Dashboard() {
                         <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
                             <Car size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
                             <p>ยังไม่มีอุปกรณ์</p>
-                            <p style={{ fontSize: '0.875rem' }}>รอรับข้อมูลจาก ESP32...</p>
                         </div>
                     ) : (
                         <div style={{ overflowX: 'auto' }}>
@@ -385,43 +408,27 @@ export default function Dashboard() {
                                                 </td>
                                                 <td style={{ padding: '14px 16px', fontSize: '0.85rem', color: '#888' }}>
                                                     {device.last_update ? new Date(device.last_update).toLocaleString('th-TH', {
-                                                        timeZone: 'Asia/Bangkok',
-                                                        day: '2-digit',
-                                                        month: '2-digit',
-                                                        year: 'numeric',
-                                                        hour: '2-digit',
-                                                        minute: '2-digit',
-                                                        second: '2-digit'
+                                                        timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', year: 'numeric',
+                                                        hour: '2-digit', minute: '2-digit', second: '2-digit'
                                                     }) : '-'}
                                                 </td>
                                                 <td style={{ padding: '14px 16px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                                                     {cred ? (
                                                         <span style={{
-                                                            fontFamily: 'monospace',
-                                                            fontSize: '0.9rem',
-                                                            fontWeight: 'bold',
+                                                            fontFamily: 'monospace', fontSize: '0.9rem', fontWeight: 'bold',
                                                             color: cred.is_registered ? '#22C55E' : '#FBBF24',
                                                             background: cred.is_registered ? '#052e16' : '#422006',
-                                                            padding: '4px 10px',
-                                                            borderRadius: '6px',
+                                                            padding: '4px 10px', borderRadius: '6px',
                                                         }}>
                                                             {cred.code} {cred.is_registered ? '✅' : '⏳'}
                                                         </span>
                                                     ) : (
-                                                        <button
-                                                            onClick={() => generateCredential(device.device_id)}
-                                                            disabled={generatingCode === device.device_id}
+                                                        <button onClick={() => generateCredential(device.device_id)} disabled={generatingCode === device.device_id}
                                                             style={{
-                                                                background: '#8B5CF6',
-                                                                color: 'white',
-                                                                border: 'none',
-                                                                padding: '6px 12px',
-                                                                borderRadius: '6px',
-                                                                cursor: 'pointer',
-                                                                fontSize: '0.75rem',
+                                                                background: '#8B5CF6', color: 'white', border: 'none', padding: '6px 12px',
+                                                                borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem',
                                                                 opacity: generatingCode === device.device_id ? 0.5 : 1,
-                                                            }}
-                                                        >
+                                                            }}>
                                                             {generatingCode === device.device_id ? '...' : '🔑 สร้างรหัส'}
                                                         </button>
                                                     )}
@@ -443,7 +450,7 @@ export default function Dashboard() {
                 </div>
             </main>
 
-            {/* Logs Modal */}
+            {/* Logs Modal (Same as before) */}
             {selectedDevice && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setSelectedDevice(null)}>
                     <div style={{ background: '#111', borderRadius: '16px', width: '100%', maxWidth: '600px', maxHeight: '80vh', overflow: 'hidden', border: '1px solid #333' }} onClick={(e) => e.stopPropagation()}>
@@ -465,13 +472,8 @@ export default function Dashboard() {
                                             <span style={{ color: getStatusConfig(log.status).color, fontWeight: 'bold' }}>{getStatusConfig(log.status).label}</span>
                                             <span style={{ color: '#666' }}>
                                                 {new Date(log.timestamp).toLocaleString('th-TH', {
-                                                    timeZone: 'Asia/Bangkok',
-                                                    day: '2-digit',
-                                                    month: '2-digit',
-                                                    year: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit',
-                                                    second: '2-digit'
+                                                    timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', year: 'numeric',
+                                                    hour: '2-digit', minute: '2-digit', second: '2-digit'
                                                 })}
                                             </span>
                                         </div>
@@ -493,6 +495,7 @@ export default function Dashboard() {
         </div>
     );
 }
+
 
 function StatCard({ icon, label, value, color }) {
     return (

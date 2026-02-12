@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
     webDir: 'www',
     server: {
         // Point directly to your VPS User App
-        url: 'http://143.14.200.117/user',
+        url: 'http://143.14.200.117',
         cleartext: true,  // Allow HTTP (not HTTPS)
     },
     android: {

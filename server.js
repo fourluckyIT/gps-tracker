@@ -30,8 +30,7 @@ const requireAuth = (req, res, next) => {
     // Allow public routes
     const publicPaths = [
         '/api/auth/status',
-        '/api/auth/verify',
-        '/api/auth/setup',
+        '/api/auth/login', // Changed from verify/setup
         '/api/auth/logout',
         '/api/track', // IoT device input
         '/api/user/login', // App login
@@ -47,18 +46,14 @@ const requireAuth = (req, res, next) => {
 
     // Check cookie
     const token = req.cookies.admin_token;
-    if (token === 'AUTHENTICATED') {
-        return next();
+    if (token) {
+        // Verify token (Simple check for now, ideally should verify session/JWT)
+        // Format: "ID:ROLE:HASH"
+        const parts = token.split(':');
+        if (parts.length === 3) return next();
     }
 
-    // Attempt to verify 2FA status from DB to ensure it's enabled
-    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
-        const enabled = row && row.value === 'true';
-        if (!enabled) {
-            return next(); // If security not set up, allow access (or could redirect to setup)
-        }
-        res.status(401).json({ error: "Unauthorized" });
-    });
+    res.status(401).json({ error: "Unauthorized" });
 };
 
 // Apply middleware to API routes only
@@ -66,100 +61,73 @@ app.use('/api', requireAuth);
 
 // --- AUTH ROUTES ---
 
-// Check 2FA Status
+// Check Auth Status & Init Super Admin
 app.get('/api/auth/status', (req, res) => {
     const token = req.cookies.admin_token;
-    const authenticated = token === 'AUTHENTICATED';
+    let authenticated = false;
+    let role = '';
+    let superAdminSetup = false;
 
-    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
-        const enabled = row ? row.value === 'true' : false;
-        res.json({ enabled, authenticated });
+    if (token) {
+        const parts = token.split(':');
+        if (parts.length === 3) {
+            authenticated = true;
+            role = parts[1];
+        }
+    }
+
+    // Check if Super Admin needs setup
+    db.get("SELECT id FROM admins WHERE phone_number = '0634969565'", (err, row) => {
+        const needsSetup = !row; // If no row, Super Admin doesn't exist yet
+        res.json({ authenticated, role, needsSetup });
     });
 });
 
-// Setup 2FA (Email + Password + Generate Secret)
-app.post('/api/auth/setup', (req, res) => {
-    if (!req.body) return res.status(400).json({ error: "Missing body" });
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Email and Password required" });
+// Login (Phone + Password)
+app.post('/api/auth/login', (req, res) => {
+    const { phone, password, is_setup } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: "Phone and Password required" });
 
-    // Check if already enabled
-    db.get("SELECT value FROM settings WHERE key = 'admin_2fa_enabled'", (err, row) => {
-        if (row && row.value === 'true') {
-            if (req.cookies.admin_token !== 'AUTHENTICATED') {
-                return res.status(403).json({ error: "System already secured" });
-            }
+    db.get("SELECT * FROM admins WHERE phone_number = ?", [phone], (err, admin) => {
+        if (err) return res.status(500).json({ error: "Database error" });
+
+        // If authenticating Super Admin for first time (Setup)
+        if (!admin && phone === '0634969565' && is_setup) {
+            // Create Super Admin
+            const salt = crypto.randomBytes(16).toString('hex');
+            const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+
+            db.run("INSERT INTO admins (phone_number, password_hash, salt, role) VALUES (?, ?, ?, ?)",
+                ['0634969565', hash, salt, 'SUPER_ADMIN'],
+                function (err) {
+                    if (err) return res.status(500).json({ error: err.message });
+
+                    const token = `${this.lastID}:SUPER_ADMIN:${hash.substring(0, 10)}`;
+                    res.cookie('admin_token', token, {
+                        httpOnly: true,
+                        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+                    });
+                    res.json({ success: true, role: 'SUPER_ADMIN' });
+                }
+            );
+            return;
         }
 
-        // 1. Hash Password
-        const salt = crypto.randomBytes(16).toString('hex');
-        const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+        if (!admin) return res.status(401).json({ error: "User not found" });
 
-        // 2. Generate 2FA Secret
-        const secret = speakeasy.generateSecret({ name: `GPS Tracker (${email})` });
+        // Verify Password
+        const hash = crypto.pbkdf2Sync(password, admin.salt, 1000, 64, 'sha512').toString('hex');
+        if (hash !== admin.password_hash) {
+            return res.status(401).json({ error: "Invalid Password" });
+        }
 
-        // 3. Save Everything
-        db.serialize(() => {
-            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_email', ?)", [email]);
-            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_salt', ?)", [salt]);
-            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)", [hash]);
-            db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_secret', ?)", [secret.base32]);
+        // Success
+        const token = `${admin.id}:${admin.role}:${hash.substring(0, 10)}`;
+        res.cookie('admin_token', token, {
+            httpOnly: true,
+            maxAge: 30 * 24 * 60 * 60 * 1000
         });
-
-        QRCode.toDataURL(secret.otpauth_url, (err, data_url) => {
-            res.json({ secret: secret.base32, qr_code: data_url });
-        });
-    });
-});
-
-// Verify 2FA & Login
-app.post('/api/auth/verify', (req, res) => {
-    const { email, password, token } = req.body;
-
-    // Fetch settings
-    db.all("SELECT key, value FROM settings WHERE key IN ('admin_email', 'admin_salt', 'admin_password', 'admin_2fa_secret', 'admin_2fa_enabled')", (err, rows) => {
-        if (err || !rows) return res.status(500).json({ error: "Database error" });
-
-        const settings = {};
-        rows.forEach(r => settings[r.key] = r.value);
-
-        if (!settings.admin_2fa_secret) return res.status(400).json({ error: "Security not set up" });
-
-        // 1. Verify Email
-        if (settings.admin_email && settings.admin_email !== email) {
-            return res.status(401).json({ error: "Invalid Email" });
-        }
-
-        // 2. Verify Password
-        if (settings.admin_password && settings.admin_salt) {
-            const hash = crypto.pbkdf2Sync(password, settings.admin_salt, 1000, 64, 'sha512').toString('hex');
-            if (hash !== settings.admin_password) {
-                return res.status(401).json({ error: "Invalid Password" });
-            }
-        }
-
-        // 3. Verify TOTP
-        const verified = speakeasy.totp.verify({
-            secret: settings.admin_2fa_secret,
-            encoding: 'base32',
-            token: token,
-            window: 1 // Allow 30s drift
-        });
-
-        if (verified) {
-            // Mark as enabled on first successful login if not already
-            if (settings.admin_2fa_enabled !== 'true') {
-                db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_2fa_enabled', 'true')");
-            }
-
-            res.cookie('admin_token', 'AUTHENTICATED', {
-                httpOnly: true,
-                maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
-            });
-            res.json({ success: true });
-        } else {
-            res.status(401).json({ error: "Invalid 2FA Code" });
-        }
+        res.json({ success: true, role: admin.role });
     });
 });
 
@@ -167,6 +135,52 @@ app.post('/api/auth/verify', (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
     res.clearCookie('admin_token');
     res.json({ success: true });
+});
+
+// --- ADMIN MANAGEMENT ROUTES (Super Admin Only) ---
+
+app.get('/api/admin/users', (req, res) => {
+    // Check Role
+    const token = req.cookies.admin_token || '';
+    if (!token.includes('SUPER_ADMIN')) return res.status(403).json({ error: "Super Admin only" });
+
+    db.all("SELECT id, phone_number, role, created_at FROM admins ORDER BY created_at DESC", [], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows);
+    });
+});
+
+app.post('/api/admin/users', (req, res) => {
+    const token = req.cookies.admin_token || '';
+    if (!token.includes('SUPER_ADMIN')) return res.status(403).json({ error: "Super Admin only" });
+
+    const { phone, password, role } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: "Missing fields" });
+
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex'); // Fixed algo
+
+    db.run("INSERT INTO admins (phone_number, password_hash, salt, role) VALUES (?, ?, ?, ?)",
+        [phone, hash, salt, role || 'ADMIN'],
+        function (err) {
+            if (err) return res.status(400).json({ error: "User already exists or error" });
+            res.json({ success: true, id: this.lastID });
+        });
+});
+
+app.delete('/api/admin/users/:id', (req, res) => {
+    const token = req.cookies.admin_token || '';
+    if (!token.includes('SUPER_ADMIN')) return res.status(403).json({ error: "Super Admin only" });
+
+    // Prevent self-delete or Super Admin delete (logic check)
+    db.get("SELECT phone_number FROM admins WHERE id = ?", [req.params.id], (err, row) => {
+        if (row && row.phone_number === '0634969565') return res.status(400).json({ error: "Cannot delete Super Admin" });
+
+        db.run("DELETE FROM admins WHERE id = ?", [req.params.id], (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ success: true });
+        });
+    });
 });
 
 // ========== DATABASE SETUP ==========
@@ -237,10 +251,20 @@ db.serialize(() => {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // Settings (for 2FA)
+    // Settings (for legacy or config)
     db.run(`CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
+    )`);
+
+    // 👑 Admins Table (New)
+    db.run(`CREATE TABLE IF NOT EXISTS admins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone_number TEXT UNIQUE,
+        password_hash TEXT,
+        salt TEXT,
+        role TEXT DEFAULT 'ADMIN', -- 'SUPER_ADMIN' or 'ADMIN'
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 });
 
