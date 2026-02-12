@@ -2,27 +2,22 @@ const sqlite3 = require('sqlite3').verbose();
 const db = new sqlite3.Database('./tracker.db');
 
 db.serialize(() => {
-    console.log("Cleaning database...");
+    console.log("--- Cleaning up Invalid Logs (Status is NULL) ---");
 
-    // Clean tables
-    db.run("DELETE FROM devices", (err) => {
-        if (err) console.error("Error cleaning devices:", err);
-        else console.log("Devices table cleaned.");
-    });
+    // Check count before
+    db.get("SELECT COUNT(*) as count FROM logs WHERE status IS NULL", (err, row) => {
+        if (err) console.error(err);
+        else console.log(`Found ${row.count} invalid records.`);
 
-    db.run("DELETE FROM logs", (err) => {
-        if (err) console.error("Error cleaning logs:", err);
-        else console.log("Logs table cleaned.");
-    });
-
-    db.run("DELETE FROM geofences", (err) => {
-        if (err) console.error("Error cleaning geofences:", err);
-        else console.log("Geofences table cleaned.");
-    });
-
-    db.run("VACUUM", (err) => {
-        if (err) console.error("Error vacuuming:", err);
-        else console.log("Database vacuumed.");
+        // Delete
+        db.run("DELETE FROM logs WHERE status IS NULL", function (err) {
+            if (err) {
+                console.error(err);
+            } else {
+                console.log(`Deleted ${this.changes} records.`);
+                console.log("--- Cleanup Complete ---");
+            }
+        });
     });
 });
 

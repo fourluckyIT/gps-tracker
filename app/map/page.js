@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState, useCallback, Suspense, useRef } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from 'next/link';
 import { GoogleMap, useJsApiLoader, Marker, Circle } from "@react-google-maps/api";
 import { io } from "socket.io-client";
 import toast, { Toaster } from "react-hot-toast";
 import {
-    Menu, X, MapPin, Crosshair, Plus, Trash2, Edit3, Check, Clock, Car, Navigation, History as HistoryIcon, Shield, ShieldAlert, AlertTriangle
+    Menu, X, MapPin, Crosshair, Plus, Trash2, Edit3, Check, Clock, Car, Navigation, History as HistoryIcon, Shield, ShieldAlert, AlertTriangle, Key
 } from "lucide-react";
 import styles from "./Map.module.css";
 
@@ -39,9 +39,47 @@ const getDistance = (pos1, pos2) => {
     return R * c;
 };
 
+// --- HELPER FUNCTIONS ---
+const getStatusLabel = (s) => {
+    if (!s) return { text: 'ไม่ทราบ', color: '#9CA3AF' };
+    const status = String(s).toLowerCase();
+
+    if (status === '1' || status === 'stolen') return { text: 'ถูกโจรกรรม!', color: '#EF4444' };
+    if (status === '2' || status === 'crash') return { text: 'เกิดอุบัติเหตุ!', color: '#F97316' };
+    if (status === '3' || status === 'normal' || status === 'active') return { text: 'ปกติ', color: '#10B981' };
+    if (status === 'offline') return { text: 'ออฟไลน์', color: '#6B7280' };
+
+    return { text: status, color: '#6B7280' }; // Default
+};
+
+const formatThaiTime = (timestamp) => {
+    if (!timestamp) return "-";
+    // If timestamp comes from SQLite CURRENT_TIMESTAMP (UTC without Z), append Z
+    let ts = timestamp;
+    if (typeof ts === 'string' && !ts.includes('Z') && !ts.includes('+')) {
+        ts += 'Z';
+    }
+    return new Date(ts).toLocaleString('th-TH', {
+        timeZone: 'Asia/Bangkok',
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+};
+
+const playAlertSound = () => {
+    try {
+        const audio = new Audio('/alert.mp3'); // Need to ensure file exists or use Base64
+        audio.play().catch(e => console.error("Audio play failed", e));
+    } catch (e) { console.error(e); }
+};
 function MapContent() {
-    const searchParams = useSearchParams();
-    const deviceId = searchParams.get("id");
+    const router = useRouter();
+
+    // User & Vehicles state
+    const [userPhone, setUserPhone] = useState(null);
+    const [allVehicles, setAllVehicles] = useState([]);
+    const [selectedVehicleIndex, setSelectedVehicleIndex] = useState(0);
+    const [deviceId, setDeviceId] = useState(null);
 
     // Map state
     const [map, setMap] = useState(null);
@@ -54,6 +92,18 @@ function MapContent() {
     const [isEditingName, setIsEditingName] = useState(false);
     const [parkingStartTime, setParkingStartTime] = useState(null);
     const [lastPosition, setLastPosition] = useState(null);
+
+    // Explicit Pan Trigger
+    const [shouldPan, setShouldPan] = useState(false);
+
+    // Force Pan when shouldPan is true and carPosition is available
+    useEffect(() => {
+        if (shouldPan && carPosition && map) {
+            map.panTo(carPosition);
+            map.setZoom(16);
+            setShouldPan(false);
+        }
+    }, [shouldPan, carPosition, map]);
 
     // User position (Phone GPS)
     const [userPosition, setUserPosition] = useState(null);
@@ -83,6 +133,11 @@ function MapContent() {
     const [logsLoading, setLogsLoading] = useState(false);
     const [showAlertsOnly, setShowAlertsOnly] = useState(false);
 
+    // Add Car Modal
+    const [addCarModalOpen, setAddCarModalOpen] = useState(false);
+    const [addCarForm, setAddCarForm] = useState({ code: "", plate: "" });
+    const [addCarLoading, setAddCarLoading] = useState(false);
+
     // Address
     const [address, setAddress] = useState("กำลังค้นหาที่อยู่...");
 
@@ -106,17 +161,56 @@ function MapContent() {
         });
     }, [carPosition, isLoaded]);
 
-    // LocalStorage Load
+    // Initial Load: Fetch All User Vehicles
     useEffect(() => {
-        if (deviceId) {
+        const phone = localStorage.getItem("user_phone");
+        if (!phone) {
+            router.replace("/");
+            return;
+        }
+        setUserPhone(phone);
+
+        // Fetch all vehicles for this user
+        fetch(`${SERVER_URL}/api/user/vehicles?token=${phone}`)
+            .then(res => res.json())
+            .then(vehicles => {
+                if (vehicles && vehicles.length > 0) {
+                    setAllVehicles(vehicles);
+                    setDeviceId(vehicles[0].device_id);
+
+                    // Load saved data for first vehicle
+                    const firstDeviceId = vehicles[0].device_id;
+                    const savedGeofences = localStorage.getItem(`geofences_${firstDeviceId}`);
+                    if (savedGeofences) setGeofences(JSON.parse(savedGeofences));
+                    const savedCarName = localStorage.getItem(`carName_${firstDeviceId}`);
+                    if (savedCarName) setCarName(savedCarName);
+                    else setCarName(vehicles[0].plate_number || firstDeviceId);
+                    setGeofencesLoaded(true);
+                } else {
+                    // No vehicles, redirect to registration
+                    router.replace("/?mode=register");
+                }
+            })
+            .catch(err => {
+                console.error("Error fetching vehicles:", err);
+                toast.error("ไม่สามารถโหลดข้อมูลรถได้");
+            });
+    }, []);
+
+    // Load data when selected vehicle changes
+    useEffect(() => {
+        if (!deviceId || !allVehicles.length) return;
+
+        const selectedVehicle = allVehicles[selectedVehicleIndex];
+        if (selectedVehicle && selectedVehicle.device_id === deviceId) {
             const savedGeofences = localStorage.getItem(`geofences_${deviceId}`);
             if (savedGeofences) setGeofences(JSON.parse(savedGeofences));
             const savedCarName = localStorage.getItem(`carName_${deviceId}`);
             if (savedCarName) setCarName(savedCarName);
-            else setCarName(deviceId); // Default to ID
-            setGeofencesLoaded(true);
+            else setCarName(selectedVehicle.plate_number || deviceId);
         }
-    }, [deviceId]);
+    }, [deviceId, selectedVehicleIndex, allVehicles]);
+
 
     // LocalStorage Save
     useEffect(() => {
@@ -128,33 +222,76 @@ function MapContent() {
         }
     }, [geofences, carName, deviceId, geofencesLoaded]);
 
-    // WebSocket
+    // Track selected device for socket
+    const selectedDeviceIdRef = useRef(deviceId);
+    useEffect(() => { selectedDeviceIdRef.current = deviceId; }, [deviceId]);
+
+    // WebSocket - Persistent Query for All Vehicles
     useEffect(() => {
-        if (!deviceId) return;
+        if (!allVehicles.length) return;
+
         const socket = io(SERVER_URL, { transports: ["websocket"], reconnectionAttempts: 5 });
 
-        socket.on("connect", () => setConnected(true));
+        socket.on("connect", () => {
+            setConnected(true);
+            // Join room for ALL vehicles
+            allVehicles.forEach(v => socket.emit("join_device", v.device_id));
+        });
+
         socket.on("disconnect", () => setConnected(false));
+
         socket.on("device_update", (data) => {
-            if (data.device_id === deviceId) {
+            // Update map ONLY if it's the selected device
+            if (data.device_id === selectedDeviceIdRef.current) {
                 const newPos = { lat: data.lat, lng: data.lng };
                 setCarPosition(newPos);
                 setCarStatus(data.status);
-                if (data.sos_update) fetchSosNumbers();
 
-                if (lastPosition) {
-                    if (getDistance(lastPosition, newPos) > 20) {
-                        setParkingStartTime(new Date());
-                        setLastPosition(newPos);
-                    }
-                } else {
-                    setLastPosition(newPos);
-                    setParkingStartTime(new Date());
+                if (data.sos_update) {
+                    fetch(`${SERVER_URL}/api/device/${data.device_id}`)
+                        .then(res => res.json())
+                        .then(d => {
+                            if (d.sos_numbers) setSosNumbers([...d.sos_numbers, "", "", ""].slice(0, 3));
+                        });
                 }
+
+                // Sound Alert for Danger Status
+                if (s === '1' || s === 'stolen' || s === '2' || s === 'crash') {
+                    playAlertSound();
+                    toast(getStatusLabel(s).text, { icon: s === 'crash' ? '💥' : '🚨', duration: 5000 });
+                }
+
+                // Update History Real-time (Prepend to top)
+                const newLog = {
+                    id: Date.now(), // Temp ID until refresh
+                    timestamp: new Date().toISOString(),
+                    status: data.status,
+                    lat: data.lat,
+                    lng: data.lng
+                };
+                setLogs(prev => [newLog, ...prev]);
+
+                setLastPosition(prev => {
+                    if (prev && getDistance(prev, newPos) > 20) {
+                        setParkingStartTime(new Date());
+                        return newPos;
+                    } else if (!prev) {
+                        setParkingStartTime(new Date());
+                        return newPos;
+                    }
+                    return prev;
+                });
             }
         });
 
-        // Initial fetch
+        return () => socket.disconnect();
+    }, [allVehicles]); // Re-connect only if vehicle list changes
+
+    // Fetch Initial Data on Selection Change
+    useEffect(() => {
+        if (!deviceId) return;
+
+        // Fetch History/Position
         fetch(`${SERVER_URL}/api/history/${deviceId}?limit=1`)
             .then(res => res.json())
             .then(data => {
@@ -162,13 +299,19 @@ function MapContent() {
                     const pos = { lat: data[0].lat, lng: data[0].lng };
                     setCarPosition(pos);
                     setLastPosition(pos);
-                    setParkingStartTime(new Date(data[0].timestamp));
+                    // Use last update time from DB, fallback to now if missing
+                    const lastUpdate = data[0].timestamp || data[0].last_update;
+                    setParkingStartTime(lastUpdate ? new Date(lastUpdate) : new Date());
+
+                    // Trigger Pan via Effect
+                    setShouldPan(true);
+                } else {
+                    toast("ไม่พบพิกัดล่าสุดของรถคันนี้", { icon: "can't find" });
                 }
             })
             .catch(err => console.error(err));
 
         fetchSosNumbers();
-        return () => socket.disconnect();
     }, [deviceId]);
 
     const fetchSosNumbers = useCallback(() => {
@@ -250,6 +393,10 @@ function MapContent() {
         }
     }, [carInGeofence]);
 
+    // Status flags (must be declared before useEffect that uses them)
+    const isStolen = (String(carStatus).toLowerCase() === "1" || String(carStatus).toLowerCase().includes("stolen"));
+    const isCrash = (String(carStatus).toLowerCase() === "2" || String(carStatus).toLowerCase().includes("crash"));
+
     // Auto-Safe: If Stolen & No Data for 15s -> Normal
     // Auto-Safe: If Stolen & No Data for 15s -> Normal
     useEffect(() => {
@@ -290,6 +437,47 @@ function MapContent() {
         const interval = setInterval(() => setParkingDisplay(formatParkingDuration()), 1000);
         return () => clearInterval(interval);
     }, [parkingStartTime]);
+
+    // Add Car Handler
+    const handleAddCar = async () => {
+        if (!addCarForm.code || !addCarForm.plate) {
+            return toast.error("กรุณากรอกข้อมูลให้ครบ");
+        }
+
+        const savedPhone = localStorage.getItem("user_phone");
+        if (!savedPhone) {
+            toast.error("กรุณาเข้าสู่ระบบก่อน");
+            return;
+        }
+
+        setAddCarLoading(true);
+        try {
+            const res = await fetch(`${SERVER_URL}/api/user/add-car`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    phone_number: savedPhone,
+                    code: addCarForm.code.toUpperCase(),
+                    plate_number: addCarForm.plate
+                })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                toast.success("เพิ่มรถสำเร็จ!");
+                setAddCarModalOpen(false);
+                setAddCarForm({ code: "", plate: "" });
+                // Reload page to refresh carousel
+                setTimeout(() => window.location.reload(), 800);
+            } else {
+                toast.error(data.error || "เพิ่มรถไม่สำเร็จ");
+            }
+        } catch (err) {
+            toast.error("เกิดข้อผิดพลาด");
+        } finally {
+            setAddCarLoading(false);
+        }
+    };
 
     // Handlers
     const fetchHistoryLogs = () => {
@@ -344,11 +532,9 @@ function MapContent() {
         });
     };
 
-    // Status logic
-    const isStolen = (carStatus === "1" || (carStatus || "").includes("STOLEN"));
-    const isCrash = (carStatus === "2" || (carStatus || "").includes("CRASH"));
-    const statusLabel = isStolen ? "รถถูกขโมย!" : isCrash ? "เกิดอุบัติเหตุ!" : "ปกติ";
-    const statusColor = isStolen ? "#FF4444" : isCrash ? "#FF9F43" : "#4ECDC4";
+    const statusInfo = getStatusLabel(carStatus);
+    const statusLabel = statusInfo.text;
+    const statusColor = statusInfo.color;
 
 
     if (loadError) return <div className={styles.errorScreen}>Error Loading Maps</div>;
@@ -435,81 +621,140 @@ function MapContent() {
 
             {/* --- BOTTOM CAROUSEL --- */}
             <div className={styles.bottomContainer}>
-                <div className={styles.carousel}>
+                <div className={styles.carousel} ref={el => {
+                    if (el && allVehicles.length > 0 && !el.hasScrolled) {
+                        el.scrollLeft = 0;
+                        el.hasScrolled = true;
+                    }
+                }}>
 
-                    {/* CARD 1: CAR DETAILS */}
-                    <div className={styles.card}>
-                        <div className={styles.cardHeader}>
-                            <div className={styles.statusTag} style={{
-                                background: isStolen ? '#fee2e2' : isCrash ? '#ffedd5' : '#e0f2f1',
-                                color: isStolen ? '#ef4444' : isCrash ? '#f97316' : '#0d9488'
-                            }}>
-                                {isStolen ? <ShieldAlert size={14} color={statusColor} /> : isCrash ? <AlertTriangle size={14} color={statusColor} /> : <Shield size={14} color={statusColor} />}
-                                {statusLabel}
-                            </div>
-                            <div className={styles.lastUpdate}>
-                                <Clock size={12} />
-                                {parkingStartTime ? new Date(parkingStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "--:--"}
-                            </div>
-                        </div>
+                    {/* VEHICLE CARDS - All User Vehicles */}
+                    {Array.isArray(allVehicles) && allVehicles.map((vehicle, index) => {
+                        if (!vehicle) return null;
+                        const isSelected = index === selectedVehicleIndex;
 
-                        <div>
-                            {isEditingName ? (
-                                <input
-                                    autoFocus
-                                    className={styles.plateNumber}
-                                    style={{ border: 'none', borderBottom: '2px solid #4285F4', outline: 'none', width: '100%' }}
-                                    value={carName}
-                                    onChange={e => setCarName(e.target.value)}
-                                    onBlur={() => setIsEditingName(false)}
-                                    onKeyDown={e => e.key === 'Enter' && setIsEditingName(false)}
-                                />
-                            ) : (
-                                <div className={styles.plateNumber} onClick={() => setIsEditingName(true)}>
-                                    {carName || "ตั้งชื่อรถ"} <Edit3 size={16} color="#ccc" style={{ verticalAlign: 'middle' }} />
+                        return (
+                            <div
+                                key={vehicle.device_id}
+                                className={styles.card}
+                                onClick={() => {
+                                    if (isSelected && map && carPosition) {
+                                        // Pan to current vehicle if already selected
+                                        map.panTo(carPosition);
+                                        map.setZoom(16);
+                                    } else {
+                                        setSelectedVehicleIndex(index);
+                                        setDeviceId(vehicle.device_id);
+                                    }
+                                }}
+                                style={{
+                                    border: isSelected ? '2px solid #4285F4' : '1px solid #e0e0e0',
+                                    opacity: isSelected ? 1 : 0.7,
+                                    cursor: 'pointer',
+                                    minWidth: '300px',
+                                    flexShrink: 0
+                                }}
+                            >
+                                <div className={styles.cardHeader}>
+                                    <div className={styles.statusTag} style={{
+                                        background: isSelected ? (isStolen ? '#fee2e2' : isCrash ? '#ffedd5' : '#e0f2f1') : '#f5f5f5',
+                                        color: isSelected ? (isStolen ? '#ef4444' : isCrash ? '#f97316' : '#0d9488') : '#666'
+                                    }}>
+                                        {isSelected ? (
+                                            isStolen ? <ShieldAlert size={14} color={statusColor} /> :
+                                                isCrash ? <AlertTriangle size={14} color={statusColor} /> :
+                                                    <Shield size={14} color={statusColor} />
+                                        ) : <Car size={14} />}
+                                        {isSelected ? statusLabel : (vehicle.plate_number || vehicle.device_id)}
+                                    </div>
+                                    {isSelected && (
+                                        <div className={styles.lastUpdate}>
+                                            <Clock size={12} />
+                                            {parkingStartTime ? new Date(parkingStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "--:--"}
+                                        </div>
+                                    )}
                                 </div>
-                            )}
 
-                            <div className={styles.carModel}>
-                                {address ? (address.length > 50 ? address.substring(0, 50) + "..." : address) : "กำลังระบุที่อยู่..."}
+                                <div>
+                                    {isSelected && isEditingName ? (
+                                        <input
+                                            autoFocus
+                                            className={styles.plateNumber}
+                                            style={{ border: 'none', borderBottom: '2px solid #4285F4', outline: 'none', width: '100%' }}
+                                            value={carName}
+                                            onChange={e => setCarName(e.target.value)}
+                                            onBlur={() => setIsEditingName(false)}
+                                            onKeyDown={e => e.key === 'Enter' && setIsEditingName(false)}
+                                        />
+                                    ) : (
+                                        <div className={styles.plateNumber} onClick={(e) => {
+                                            if (isSelected) {
+                                                e.stopPropagation();
+                                                setIsEditingName(true);
+                                            }
+                                        }}>
+                                            {isSelected ? (carName || "ตั้งชื่อรถ") : (vehicle.plate_number || vehicle.device_id)}
+                                            {isSelected && <Edit3 size={16} color="#ccc" style={{ verticalAlign: 'middle', marginLeft: '5px' }} />}
+                                        </div>
+                                    )}
+                                    {isSelected && (
+                                        <div className={styles.carModel}>
+                                            {address ? (address.length > 50 ? address.substring(0, 50) + "..." : address) : "กำลังระบุที่อยู่..."}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {isSelected && (
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                                        <div className={styles.distanceBadge} style={{ background: '#f5f5f5', color: '#666' }}>
+                                            <Clock size={14} /> จอด: {parkingDisplay}
+                                        </div>
+                                        <div className={styles.distanceBadge}>
+                                            <Navigation size={14} fill="currentColor" />
+                                            {distanceToCar ? (distanceToCar < 1000 ? `${Math.round(distanceToCar)} ม.` : `${(distanceToCar / 1000).toFixed(1)} กม.`) : "กำลังระบุ..."}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {isSelected && (
+                                    <div className={styles.cardActions}>
+                                        <button className={styles.btnSecondary} onClick={(e) => { e.stopPropagation(); fetchHistoryLogs(); }}>
+                                            <HistoryIcon size={20} /> ประวัติ
+                                        </button>
+                                        <button className={styles.btnPrimary} onClick={(e) => { e.stopPropagation(); navigateToCar(); }}>
+                                            <Navigation size={20} fill="white" /> นำทาง
+                                        </button>
+                                    </div>
+                                )}
                             </div>
-                        </div>
+                        );
+                    })}
 
-                        {/* Parking & Distance Badge */}
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                            <div className={styles.distanceBadge} style={{ background: '#f5f5f5', color: '#666' }}>
-                                <Clock size={14} /> จอด: {parkingDisplay}
-                            </div>
-                            <div className={styles.distanceBadge}>
-                                <Navigation size={14} fill="currentColor" />
-                                {distanceToCar ? (distanceToCar < 1000 ? `${Math.round(distanceToCar)} ม.` : `${(distanceToCar / 1000).toFixed(1)} กม.`) : "กำลังระบุ..."}
-                            </div>
-                        </div>
-
-                        <div className={styles.cardActions}>
-                            <button className={styles.btnSecondary} onClick={fetchHistoryLogs}>
-                                <HistoryIcon size={20} /> ประวัติ
-                            </button>
-                            <button className={styles.btnPrimary} onClick={navigateToCar}>
-                                <Navigation size={20} fill="white" /> นำทาง
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* CARD 2: ADD CAR (Placeholder) */}
-                    <div className={styles.addCard} onClick={() => toast("ฟีเจอร์นี้เตรียมเปิดใช้งานเร็วๆนี้")}>
+                    {/* ADD NEW CAR CARD */}
+                    <div className={styles.addCard} onClick={() => setAddCarModalOpen(true)} style={{ cursor: 'pointer', minWidth: '120px', flexShrink: 0 }}>
                         <div className={styles.addIconCircle}>
                             <Plus size={32} />
                         </div>
-                        <div style={{ fontWeight: 600, color: '#666' }}>เพิ่มรถใหม่</div>
+                        <div style={{ fontWeight: 600, color: '#666', marginTop: '8px' }}>เพิ่มรถ</div>
                     </div>
 
                 </div>
 
-                {/* Dots */}
+                {/* Dots - Dynamic based on number of vehicles */}
                 <div className={styles.pagination}>
-                    <div className={`${styles.dot} ${styles.active}`} />
-                    <div className={styles.dot} />
+                    {allVehicles.map((_, index) => (
+                        <div
+                            key={index}
+                            className={`${styles.dot} ${index === selectedVehicleIndex ? styles.active : ""}`}
+                            onClick={() => {
+                                setSelectedVehicleIndex(index);
+                                setDeviceId(allVehicles[index].device_id);
+                            }}
+                            style={{ cursor: 'pointer' }}
+                        />
+                    ))}
+                    {/* Dot for Add New Car card */}
+                    <div className={styles.dot} style={{ opacity: 0.3 }} />
                 </div>
             </div>
 
@@ -547,7 +792,10 @@ function MapContent() {
                     </div>
 
                     <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
-                        <div className={`${styles.menuItem} ${styles.logout}`} onClick={() => window.location.href = '/'}>
+                        <div className={`${styles.menuItem} ${styles.logout}`} onClick={() => {
+                            localStorage.removeItem('user_phone');
+                            window.location.href = '/';
+                        }}>
                             ออกจากระบบ
                         </div>
                     </div>
@@ -597,19 +845,110 @@ function MapContent() {
                             <button onClick={() => setHistoryOpen(false)}><X size={24} /></button>
                         </div>
                         <ul style={{ listStyle: 'none', padding: 0 }}>
-                            {logs.map((log, i) => (
+                            {[...logs].sort((a, b) => {
+                                const tA = (a.timestamp || a.last_update || '').replace(' ', 'T');
+                                const tB = (b.timestamp || b.last_update || '').replace(' ', 'T');
+                                return new Date(tB) - new Date(tA);
+                            }).map((log, i) => (
                                 <li key={i} style={{ padding: '12px', borderBottom: '1px solid #eee', fontSize: 13 }}>
                                     <div style={{ fontWeight: 'bold', color: '#333' }}>
-                                        {new Date(log.timestamp).toLocaleString('th-TH')}
+                                        {formatThaiTime(log.timestamp || log.last_update)}
                                     </div>
-                                    <div style={{ color: '#666' }}>
-                                        {log.status === '1' ? 'ขโมย' : log.status === '2' ? 'ชน' : log.status}
+                                    <div style={{ color: getStatusLabel(log.status).color }}>
+                                        {getStatusLabel(log.status).text}
                                     </div>
                                 </li>
                             ))}
                         </ul>
                     </div>
                 </div>
+            )}
+
+            {/* ADD CAR MODAL */}
+            {addCarModalOpen && (
+                <>
+                    <div
+                        style={{
+                            position: 'fixed',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: 'rgba(0, 0, 0, 0.5)',
+                            zIndex: 150
+                        }}
+                        onClick={() => setAddCarModalOpen(false)}
+                    />
+                    <div
+                        style={{
+                            position: 'fixed',
+                            top: '50%',
+                            left: '50%',
+                            transform: 'translate(-50%, -50%)',
+                            zIndex: 151,
+                            width: '90%',
+                            maxWidth: '450px',
+                            background: 'white',
+                            borderRadius: '24px',
+                            padding: '32px',
+                            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)'
+                        }}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                            <h2 style={{ fontSize: '24px', fontWeight: 'bold', margin: 0 }}>เพิ่มรถใหม่ 🚗</h2>
+                            <button onClick={() => setAddCarModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        <p style={{ color: '#666', marginBottom: '24px' }}>กรอกรหัสจากอุปกรณ์ใหม่ของคุณ</p>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div style={{ background: 'white', padding: '16px', borderRadius: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{ color: '#F97316' }}><Key size={20} /></div>
+                                <input
+                                    style={{ flex: 1, outline: 'none', border: 'none', fontFamily: 'monospace', fontWeight: 'bold', textTransform: 'uppercase', fontSize: '18px' }}
+                                    placeholder="Credential Code"
+                                    value={addCarForm.code}
+                                    onChange={(e) => setAddCarForm({ ...addCarForm, code: e.target.value })}
+                                />
+                            </div>
+
+                            <div style={{ background: 'white', padding: '16px', borderRadius: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{ color: '#10B981' }}><Car size={20} /></div>
+                                <input
+                                    style={{ flex: 1, outline: 'none', border: 'none' }}
+                                    placeholder="ทะเบียนรถ (Ex. กข-1234)"
+                                    value={addCarForm.plate}
+                                    onChange={(e) => setAddCarForm({ ...addCarForm, plate: e.target.value })}
+                                />
+                            </div>
+
+                            <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '12px', padding: '12px', fontSize: '14px', color: '#1E40AF' }}>
+                                💡 ชื่อผู้ขับขี่จะใช้ข้อมูลเดิมจากบัญชีของคุณ
+                            </div>
+                        </div>
+
+                        <button
+                            onClick={handleAddCar}
+                            disabled={addCarLoading}
+                            style={{
+                                width: '100%',
+                                background: addCarLoading ? '#9CA3AF' : '#3B82F6',
+                                color: 'white',
+                                padding: '16px',
+                                borderRadius: '16px',
+                                fontWeight: 'bold',
+                                fontSize: '18px',
+                                border: 'none',
+                                cursor: addCarLoading ? 'not-allowed' : 'pointer',
+                                marginTop: '24px'
+                            }}
+                        >
+                            {addCarLoading ? "กำลังเพิ่ม..." : "เพิ่มรถ"}
+                        </button>
+                    </div>
+                </>
             )}
 
         </div>

@@ -20,13 +20,29 @@ export default function MobileLogin() {
     // 1. AUTO-LOGIN CHECK
     useEffect(() => {
         const checkSession = async () => {
+            // Check for deep link modes
+            const params = new URLSearchParams(window.location.search);
+            const mode = params.get("mode");
+
+            if (mode === "register") {
+                setStep(2);
+                setLoading(false);
+                return;
+            }
+
+            if (mode === "add-car") {
+                setStep(3); // New: Add car mode
+                setLoading(false);
+                return;
+            }
+
             const savedPhone = localStorage.getItem("user_phone");
             if (savedPhone) {
                 try {
                     const res = await fetch(`${SERVER_URL}/api/user/vehicles?token=${savedPhone}`);
                     const data = await res.json();
                     if (Array.isArray(data) && data.length > 0) {
-                        router.replace(`/map?id=${data[0].device_id}`);
+                        router.replace("/map");
                         return;
                     }
                 } catch (e) {
@@ -63,7 +79,7 @@ export default function MobileLogin() {
                 const vData = await vRes.json();
                 if (vData.length > 0) {
                     toast.success("ยินดีต้อนรับกลับ!");
-                    router.replace(`/map?id=${vData[0].device_id}`);
+                    router.replace("/map");
                 } else {
                     toast.error("ไม่พบรถในระบบ");
                     setLoading(false);
@@ -104,12 +120,12 @@ export default function MobileLogin() {
                 // Redirect
                 const deviceId = data.device_id;
                 if (deviceId) {
-                    router.replace(`/map?id=${deviceId}`);
+                    router.replace("/map");
                 } else {
                     // Fallback fetch if API doesn't return ID directly
                     const vRes = await fetch(`${SERVER_URL}/api/user/vehicles?token=${phone}`);
                     const vData = await vRes.json();
-                    if (vData.length > 0) router.replace(`/map?id=${vData[0].device_id}`);
+                    if (vData.length > 0) router.replace("/map");
                 }
             } else {
                 toast.error(data.error || "ลงทะเบียนไม่สำเร็จ");
@@ -120,6 +136,43 @@ export default function MobileLogin() {
             setLoading(false);
         }
     };
+
+    const handleAddCar = async () => {
+        if (!regForm.code || !regForm.plate) return toast.error("กรุณากรอกข้อมูลให้ครบ");
+
+        const savedPhone = localStorage.getItem("user_phone");
+        if (!savedPhone) {
+            toast.error("กรุณาเข้าสู่ระบบก่อน");
+            setStep(1);
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const res = await fetch(`${SERVER_URL}/api/user/add-car`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    phone_number: savedPhone,
+                    code: regForm.code.toUpperCase(),
+                    plate_number: regForm.plate
+                })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                toast.success("เพิ่มรถสำเร็จ!");
+                router.replace("/map");
+            } else {
+                toast.error(data.error || "เพิ่มรถไม่สำเร็จ");
+                setLoading(false);
+            }
+        } catch (err) {
+            toast.error("เกิดข้อผิดพลาด");
+            setLoading(false);
+        }
+    };
+
 
     // --- RENDER ---
     if (loading && step === 0) {
@@ -220,6 +273,52 @@ export default function MobileLogin() {
                             {loading ? <Loader2 className="animate-spin" /> : "ลงทะเบียนและเริ่มใช้งาน"}
                         </button>
                     </div>
+                </div>
+            )}
+
+            {/* STEP 3: ADD CAR (FOR EXISTING USER) */}
+            {step === 3 && (
+                <div className="w-full max-w-sm z-10 animate-slide-up">
+                    <button onClick={() => router.back()} className="text-sm text-gray-400 mb-6 flex items-center gap-1">
+                        ← กลับ
+                    </button>
+
+                    <h2 className="text-2xl font-bold text-gray-900 mb-2">เพิ่มรถใหม่ 🚗</h2>
+                    <p className="text-gray-500 mb-8">กรอกรหัสจากอุปกรณ์ใหม่ของคุณ</p>
+
+                    <div className="space-y-4">
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
+                            <Key className="text-orange-500" />
+                            <input
+                                className="flex-1 outline-none font-mono font-bold uppercase text-lg placeholder:normal-case placeholder:font-sans placeholder:text-sm"
+                                placeholder="Credential Code (Ex. A1B2C3)"
+                                value={regForm.code}
+                                onChange={(e) => setRegForm({ ...regForm, code: e.target.value })}
+                            />
+                        </div>
+
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
+                            <Car className="text-green-500" />
+                            <input
+                                className="flex-1 outline-none"
+                                placeholder="ทะเบียนรถ (Ex. กข-1234)"
+                                value={regForm.plate}
+                                onChange={(e) => setRegForm({ ...regForm, plate: e.target.value })}
+                            />
+                        </div>
+
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700">
+                            💡 ชื่อผู้ขับขี่จะใช้ข้อมูลเดิมจากบัญชีของคุณ
+                        </div>
+                    </div>
+
+                    <button
+                        onClick={handleAddCar}
+                        disabled={loading}
+                        className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-blue-200 shadow-xl active:scale-95 transition-all disabled:opacity-50 disabled:active:scale-100 flex items-center justify-center gap-2 mt-6"
+                    >
+                        {loading ? <Loader2 className="animate-spin" /> : <>เพิ่มรถ <ArrowRight /></>}
+                    </button>
                 </div>
             )}
 
