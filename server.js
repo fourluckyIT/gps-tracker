@@ -4,742 +4,329 @@ const { Server } = require("socket.io");
 const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const path = require('path');
 const next = require('next');
-const speakeasy = require('speakeasy');
-const QRCode = require('qrcode');
-const cookieParser = require('cookie-parser');
 
 const dev = process.env.NODE_ENV !== 'production';
 const nextApp = next({ dev });
 const handle = nextApp.getRequestHandler();
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 const PORT = 3000;
 
-app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.text({ type: 'text/*' }));
-app.use(cookieParser());
+nextApp.prepare().then(() => {
+    const app = express();
+    const server = http.createServer(app);
+    const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
-const crypto = require('crypto');
+    app.use(cors());
+    app.use(bodyParser.text({ type: 'text/*' }));
+    app.use(bodyParser.json());
 
-// --- AUTH MIDDLEWARE ---
-const requireAuth = (req, res, next) => {
-    // Allow public routes
-    const publicPaths = [
-        '/api/auth/status',
-        '/api/auth/login', // Changed from verify/setup
-        '/api/auth/logout',
-        '/api/track', // IoT device input
-        '/api/user/login', // App login
-        '/api/user/verify', // App verify
-        '/api/user/register', // App register
-        '/api/user/add-vehicle', // App add vehicle
-        '/api/user/vehicles' // App list vehicles
-    ];
+    // Serve Static Website (Next.js handles this mostly, but keeping for public folder if needed)
+    app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
-    // Use originalUrl because app.use('/api') strips the prefix from req.path
-    const pathToCheck = req.originalUrl.split('?')[0];
-    if (publicPaths.includes(pathToCheck)) return next();
+    const db = new sqlite3.Database('tracker.db');
 
-    // Check cookie
-    const token = req.cookies.admin_token;
-    if (token) {
-        // Verify token (Simple check for now, ideally should verify session/JWT)
-        // Format: "ID:ROLE:HASH"
-        const parts = token.split(':');
-        if (parts.length === 3) return next();
-    }
+    db.serialize(() => {
+        // Devices: 1 row per MAC (latest data)
+        db.run(`CREATE TABLE IF NOT EXISTS devices (
+            device_id TEXT PRIMARY KEY,
+            lat REAL,
+            lng REAL,
+            status TEXT,
+            owner_name TEXT DEFAULT '',
+            license_plate TEXT DEFAULT '',
+            sos_numbers TEXT DEFAULT '[]',
+            last_update DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-    res.status(401).json({ error: "Unauthorized" });
-};
+        // Logs: All historical data
+        db.run(`CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT,
+            lat REAL,
+            lng REAL,
+            status TEXT,
+            raw_data TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-// Apply middleware to API routes only
-app.use('/api', requireAuth);
+        // Credentials: Admin creates when device first appears
+        db.run(`CREATE TABLE IF NOT EXISTS credentials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE,
+            device_id TEXT,
+            is_registered INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-// --- AUTH ROUTES ---
+        // Registrations: User vehicle info
+        db.run(`CREATE TABLE IF NOT EXISTS registrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_token TEXT UNIQUE,
+            devices TEXT DEFAULT '[]',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-// Check Auth Status & Init Super Admin
-app.get('/api/auth/status', (req, res) => {
-    const token = req.cookies.admin_token;
-    let authenticated = false;
-    let role = '';
-    let superAdminSetup = false;
+        // Vehicle info linked to credentials
+        db.run(`CREATE TABLE IF NOT EXISTS vehicles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            credential_code TEXT,
+            device_id TEXT,
+            plate_number TEXT,
+            driver_name TEXT,
+            emergency_phone TEXT,
+            vehicle_name TEXT,
+            user_token TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-    if (token) {
-        const parts = token.split(':');
-        if (parts.length === 3) {
-            authenticated = true;
-            role = parts[1];
-        }
-    }
+        // 🛡️ Geofences (Parking Spots) - Max 3 per device
+        db.run(`CREATE TABLE IF NOT EXISTS geofences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT,
+            name TEXT,
+            lat REAL,
+            lng REAL,
+            radius REAL,
+            is_inside INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-    // Check if Super Admin needs setup
-    db.get("SELECT id FROM admins WHERE phone_number = '0634969565'", (err, row) => {
-        const needsSetup = !row; // If no row, Super Admin doesn't exist yet
-        res.json({ authenticated, role, needsSetup });
+        // Settings (for legacy or config)
+        db.run(`CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )`);
+
+        // 👑 Admins Table (New)
+        db.run(`CREATE TABLE IF NOT EXISTS admins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT UNIQUE,
+            password_hash TEXT,
+            salt TEXT,
+            role TEXT DEFAULT 'ADMIN', -- 'SUPER_ADMIN' or 'ADMIN'
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
     });
-});
 
-// Login (Phone + Password)
-app.post('/api/auth/login', (req, res) => {
-    const { phone, password, is_setup } = req.body;
-    if (!phone || !password) return res.status(400).json({ error: "Phone and Password required" });
+    // ========== HANDLE INCOMING DATA ==========
+    function handleData(data) {
+        const { deviceId, lat, lng, status, rawContent, timestamp } = data;
 
-    db.get("SELECT * FROM admins WHERE phone_number = ?", [phone], (err, admin) => {
-        if (err) return res.status(500).json({ error: "Database error" });
+        // Validate
+        if (!deviceId || lat === null || lng === null) return;
 
-        // If authenticating Super Admin for first time (Setup)
-        if (!admin && phone === '0634969565' && is_setup) {
-            // Create Super Admin
-            const salt = crypto.randomBytes(16).toString('hex');
-            const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+        const eventTime = timestamp ? timestamp.toISOString() : new Date().toISOString();
 
-            db.run("INSERT INTO admins (phone_number, password_hash, salt, role) VALUES (?, ?, ?, ?)",
-                ['0634969565', hash, salt, 'SUPER_ADMIN'],
-                function (err) {
-                    if (err) return res.status(500).json({ error: err.message });
+        // 1. Insert into LOGS (History)
+        const stmt = db.prepare("INSERT INTO logs (device_id, lat, lng, status, raw_data, timestamp) VALUES (?, ?, ?, ?, ?, ?)");
+        stmt.run(deviceId, lat, lng, status, rawContent, eventTime);
+        stmt.finalize();
 
-                    const token = `${this.lastID}:SUPER_ADMIN:${hash.substring(0, 10)}`;
-                    res.cookie('admin_token', token, {
-                        httpOnly: true,
-                        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
-                    });
-                    res.json({ success: true, role: 'SUPER_ADMIN' });
-                }
-            );
-            return;
-        }
+        // 2. Update CURRENT STATE (Latest)
+        db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update) 
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(device_id) DO UPDATE SET 
+            lat=excluded.lat, 
+            lng=excluded.lng, 
+            status=excluded.status, 
+            last_update=excluded.last_update`,
+            [deviceId, lat, lng, status, eventTime], (err) => {
+                if (err) console.error(err.message);
+            });
 
-        if (!admin) return res.status(401).json({ error: "User not found" });
+        // 3. Check Geofences
+        checkGeofences(deviceId, lat, lng);
 
-        // Verify Password
-        const hash = crypto.pbkdf2Sync(password, admin.salt, 1000, 64, 'sha512').toString('hex');
-        if (hash !== admin.password_hash) {
-            return res.status(401).json({ error: "Invalid Password" });
-        }
-
-        // Success
-        const token = `${admin.id}:${admin.role}:${hash.substring(0, 10)}`;
-        res.cookie('admin_token', token, {
-            httpOnly: true,
-            maxAge: 30 * 24 * 60 * 60 * 1000
-        });
-        res.json({ success: true, role: admin.role });
-    });
-});
-
-// Logout
-app.post('/api/auth/logout', (req, res) => {
-    res.clearCookie('admin_token');
-    res.json({ success: true });
-});
-
-// --- ADMIN MANAGEMENT ROUTES (Super Admin Only) ---
-
-app.get('/api/admin/users', (req, res) => {
-    // Check Role
-    const token = req.cookies.admin_token || '';
-    if (!token.includes('SUPER_ADMIN')) return res.status(403).json({ error: "Super Admin only" });
-
-    db.all("SELECT id, phone_number, role, created_at FROM admins ORDER BY created_at DESC", [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
-    });
-});
-
-app.post('/api/admin/users', (req, res) => {
-    const token = req.cookies.admin_token || '';
-    if (!token.includes('SUPER_ADMIN')) return res.status(403).json({ error: "Super Admin only" });
-
-    const { phone, password, role } = req.body;
-    if (!phone || !password) return res.status(400).json({ error: "Missing fields" });
-
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex'); // Fixed algo
-
-    db.run("INSERT INTO admins (phone_number, password_hash, salt, role) VALUES (?, ?, ?, ?)",
-        [phone, hash, salt, role || 'ADMIN'],
-        function (err) {
-            if (err) return res.status(400).json({ error: "User already exists or error" });
-            res.json({ success: true, id: this.lastID });
-        });
-});
-
-app.delete('/api/admin/users/:id', (req, res) => {
-    const token = req.cookies.admin_token || '';
-    if (!token.includes('SUPER_ADMIN')) return res.status(403).json({ error: "Super Admin only" });
-
-    // Prevent self-delete or Super Admin delete (logic check)
-    db.get("SELECT phone_number FROM admins WHERE id = ?", [req.params.id], (err, row) => {
-        if (row && row.phone_number === '0634969565') return res.status(400).json({ error: "Cannot delete Super Admin" });
-
-        db.run("DELETE FROM admins WHERE id = ?", [req.params.id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ success: true });
-        });
-    });
-});
-
-// ========== DATABASE SETUP ==========
-const db = new sqlite3.Database('tracker.db');
-db.serialize(() => {
-    // Devices: 1 row per MAC (latest data)
-    db.run(`CREATE TABLE IF NOT EXISTS devices (
-        device_id TEXT PRIMARY KEY,
-        lat REAL,
-        lng REAL,
-        status TEXT,
-        owner_name TEXT DEFAULT '',
-        license_plate TEXT DEFAULT '',
-        sos_numbers TEXT DEFAULT '[]',
-        last_update DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Logs: All historical data
-    db.run(`CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id TEXT,
-        lat REAL,
-        lng REAL,
-        status TEXT,
-        raw_data TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Credentials: Admin creates when device first appears
-    db.run(`CREATE TABLE IF NOT EXISTS credentials (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE,
-        device_id TEXT,
-        is_registered INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Registrations: User vehicle info
-    db.run(`CREATE TABLE IF NOT EXISTS registrations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_token TEXT UNIQUE,
-        devices TEXT DEFAULT '[]',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Vehicle info linked to credentials
-    db.run(`CREATE TABLE IF NOT EXISTS vehicles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        credential_code TEXT,
-        device_id TEXT,
-        plate_number TEXT,
-        driver_name TEXT,
-        emergency_phone TEXT,
-        vehicle_name TEXT,
-        user_token TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // 🛡️ Geofences (Parking Spots) - Max 3 per device
-    db.run(`CREATE TABLE IF NOT EXISTS geofences (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id TEXT,
-        name TEXT,
-        lat REAL,
-        lng REAL,
-        radius REAL,
-        is_inside INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Settings (for legacy or config)
-    db.run(`CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    )`);
-
-    // 👑 Admins Table (New)
-    db.run(`CREATE TABLE IF NOT EXISTS admins (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        phone_number TEXT UNIQUE,
-        password_hash TEXT,
-        salt TEXT,
-        role TEXT DEFAULT 'ADMIN', -- 'SUPER_ADMIN' or 'ADMIN'
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-});
-
-// ========== DATA PARSER ==========
-// Format: "MAC,STATUS LAT, LNG, TIMESTAMP"
-// Example: "AA:BB:CC:DD:EE:FF,1 14.356857, 100.610772, 1234567890"
-function parseMessage(content) {
-    let deviceId = "unknown";
-    let lat = null;
-    let lng = null;
-    let status = "0";
-    let timestamp = null;
-    let rawContent = typeof content === 'string' ? content.trim() : JSON.stringify(content);
-
-    if (typeof content === 'string') {
-        const trimmed = content.trim();
-
-        // Try JSON first
-        if (trimmed.startsWith('{')) {
-            try {
-                const json = JSON.parse(trimmed);
-                deviceId = json.deviceId || json.device_id || json.mac || "unknown";
-                lat = parseFloat(json.lat || json.latitude) || null;
-                lng = parseFloat(json.lng || json.longitude) || null;
-                status = String(json.status || json.type || "0");
-                timestamp = json.timestamp ? new Date(json.timestamp * 1000) : null;
-            } catch (e) { }
-        } else {
-            // Parse: "MAC,STATUS LAT, LNG, TIMESTAMP"
-            const parts = trimmed.split(/[, ]+/).filter(p => p.trim() !== '');
-
-            if (parts.length >= 4) {
-                deviceId = parts[0]; // MAC Address
-                status = parts[1];   // Status code
-                lat = parseFloat(parts[2]) || null;
-                lng = parseFloat(parts[3]) || null;
-
-                // TIMESTAMP (parts[4]) is Unix Timestamp in SECONDS
-                if (parts.length >= 5) {
-                    const ts = parseInt(parts[4]);
-                    if (!isNaN(ts) && ts > 0) {
-                        timestamp = new Date(ts * 1000); // Convert to MS
-                    }
-                }
-            }
-        }
-    }
-
-    // Map status codes to labels
-    const statusMap = {
-        '0': 'UNKNOWN',
-        '1': 'STOLEN',
-        '2': 'CRASH',
-        '3': 'NORMAL'
-    };
-    const statusLabel = statusMap[status] || status;
-
-    return { deviceId, lat, lng, status: statusLabel, rawContent, timestamp };
-}
-
-// ========== HANDLE INCOMING DATA ==========
-function handleData(data) {
-    const { deviceId, lat, lng, status, rawContent, timestamp } = data;
-
-    // Use device timestamp if available, otherwise server time
-    const eventTime = timestamp ? timestamp.toISOString() : new Date().toISOString();
-
-    // Save to logs (history) - KEEP EVERYTHING
-    db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
-        [deviceId, lat || 0, lng || 0, status, rawContent, eventTime]);
-
-    // Check if GPS is valid (not 0.0)
-    // Use a threshold because float 0.0 might be 0.000000001
-    const isValidGPS = (Math.abs(lat) > 0.0001 && Math.abs(lng) > 0.0001);
-
-    if (isValidGPS) {
-        // Update EVERYTHING including position
-        db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(device_id)
-                    DO UPDATE SET lat=excluded.lat, lng=excluded.lng, status=excluded.status, last_update=excluded.last_update`,
-            [deviceId, lat, lng, status, eventTime]);
-
-        // Emit new data
+        // 4. Emit to Frontend
         io.emit('device_update', {
             device_id: deviceId,
-            lat, lng, status,
-            raw: rawContent,
+            lat,
+            lng,
+            status,
+            raw_data: rawContent,
             last_update: eventTime
         });
-    } else {
-        // Invalid GPS: Update only Status & Time, KEEP OLD LAT/LNG
-        // We need to fetch old lat/lng to emit via socket correctly (so map doesn't jump to 0)
-        db.get("SELECT lat, lng FROM devices WHERE device_id = ?", [deviceId], (err, row) => {
-            const currentLat = row ? row.lat : 0;
-            const currentLng = row ? row.lng : 0;
+    }
 
-            db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(device_id)
-                        DO UPDATE SET status=excluded.status, last_update=excluded.last_update`,
-                [deviceId, currentLat, currentLng, status, eventTime]);
+    // ========== GEOFENCE LOGIC ==========
+    function checkGeofences(deviceId, lat, lng) {
+        db.all("SELECT * FROM geofences WHERE device_id = ?", [deviceId], (err, fences) => {
+            if (err || !fences) return;
 
-            // Emit with OLD coordinates (so map stays put)
-            io.emit('device_update', {
-                device_id: deviceId,
-                lat: currentLat, // Send old valid coord
-                lng: currentLng,
-                status,
-                raw: rawContent,
-                last_update: eventTime
+            fences.forEach(fence => {
+                const distance = getDistanceFromLatLonInKm(lat, lng, fence.lat, fence.lng) * 1000; // Meters
+                const isInside = distance <= fence.radius ? 1 : 0;
+
+                if (isInside !== fence.is_inside) {
+                    // Status Changed
+                    const type = isInside ? 'ENTER' : 'EXIT';
+                    console.log(`🚧 Geofence Alert: ${deviceId} ${type} ${fence.name}`);
+
+                    // Update DB
+                    db.run("UPDATE geofences SET is_inside = ? WHERE id = ?", [isInside, fence.id]);
+
+                    // Emit Alert
+                    io.emit('geofence_alert', {
+                        device_id: deviceId,
+                        fence_name: fence.name,
+                        type: type,
+                        timestamp: new Date().toISOString()
+                    });
+                }
             });
         });
     }
 
-    // 🛡️ CHECK GEOFENCES
-    checkGeofences(deviceId, lat, lng);
+    // Helper: Haversine Formula
+    function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+        const R = 6371; // Radius of the earth in km
+        const dLat = deg2rad(lat2 - lat1);
+        const dLon = deg2rad(lon2 - lon1);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        const d = R * c; // Distance in km
+        return d;
+    }
 
-    console.log(`📡 [${deviceId}] Status: ${status}, Lat: ${lat}, Lng: ${lng}`);
-    return { success: true };
-}
+    function deg2rad(deg) {
+        return deg * (Math.PI / 180);
+    }
 
-// ========== GEOFENCE LOGIC ==========
-function checkGeofences(deviceId, lat, lng) {
-    if (!lat || !lng) return;
+    app.post('/api/track', (req, res) => {
+        let deviceId, lat, lng, stats, rawContent;
+        const content = req.body;
+        // console.log('Received:', content); // Debug logging
 
-    db.all("SELECT * FROM geofences WHERE device_id = ?", [deviceId], (err, fences) => {
-        if (err) console.error("Geo DB Error:", err);
-        if (!fences || fences.length === 0) {
-            console.log(`No fences for ${deviceId}`);
-            return;
+        rawContent = typeof content === 'string' ? content : JSON.stringify(content);
+
+        if (typeof content === 'string') {
+            const parts = content.split(',');
+            // Format: ID,??,STATUS,LAT,LNG,TIMESTAMP
+            if (parts.length >= 5) {
+                deviceId = parts[0];
+                stats = parts[2];
+                lat = parseFloat(parts[3]);
+                lng = parseFloat(parts[4]);
+            } else if (parts.length >= 3) {
+                deviceId = parts[0];
+                lat = parseFloat(parts[1]);
+                lng = parseFloat(parts[2]);
+            }
+        } else {
+            deviceId = content.deviceId;
+            lat = content.lat;
+            lng = content.lng;
         }
 
-        fences.forEach(fence => {
-            const distance = getDistanceFromLatLonInKm(lat, lng, fence.lat, fence.lng) * 1000; // Meters
-            const isInside = distance <= fence.radius;
-            const wasInside = fence.is_inside === 1;
+        if (!deviceId) return res.status(400).send('Invalid');
 
-            if (deviceId.includes('MOCK')) {
-                console.log(`🔍 [Geo] ${fence.name}: ${distance.toFixed(1)}m / ${fence.radius}m | In: ${isInside} (Was: ${wasInside})`);
-            }
+        // Use handleData to process
+        // Note: Logic duplicated slightly, sticking to direct DB for now as per original code for this route
+        // But better to unify. For now, matching original behavior but cleaning up variables.
 
-            // ENTER Event
-            if (isInside && !wasInside) {
-                console.log(`🛡️ [ENTER] ${deviceId} entered ${fence.name}`);
-                db.run("UPDATE geofences SET is_inside = 1 WHERE id = ?", [fence.id]);
-                io.emit('geofence_alert', { device_id: deviceId, type: 'ENTER', name: fence.name, time: new Date() });
+        const stmt = db.prepare("INSERT INTO logs (device_id, lat, lng, raw_data) VALUES (?, ?, ?, ?)");
+        stmt.run(deviceId, lat, lng, rawContent);
+        stmt.finalize();
 
-                // Log event
-                db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data) VALUES (?, ?, ?, ?, ?)`,
-                    [deviceId, lat, lng, 'GEOFENCE_ENTER', `Entered ${fence.name}`]);
-            }
+        db.run(`INSERT INTO devices (device_id, lat, lng, status, last_update) 
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(device_id) DO UPDATE SET lat=excluded.lat, lng=excluded.lng, status=?, last_update=CURRENT_TIMESTAMP`,
+            [stats || 'active']);
 
-            // EXIT Event
-            if (!isInside && wasInside) {
-                console.log(`🛡️ [EXIT] ${deviceId} exited ${fence.name}`);
-                db.run("UPDATE geofences SET is_inside = 0 WHERE id = ?", [fence.id]);
-                io.emit('geofence_alert', { device_id: deviceId, type: 'EXIT', name: fence.name, time: new Date() });
-
-                // Log event
-                db.run(`INSERT INTO logs (device_id, lat, lng, status, raw_data) VALUES (?, ?, ?, ?, ?)`,
-                    [deviceId, lat, lng, 'GEOFENCE_EXIT', `Exited ${fence.name}`]);
-            }
+        io.emit('device_update', {
+            device_id: deviceId,
+            lat,
+            lng,
+            status: stats || 'Active',
+            raw: rawContent,
+            last_update: new Date().toISOString()
         });
-    });
-}
 
-function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
-    var R = 6371; // Km
-    var dLat = deg2rad(lat2 - lat1);
-    var dLon = deg2rad(lon2 - lon1);
-    var a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-}
-
-function deg2rad(deg) {
-    return deg * (Math.PI / 180);
-}
-
-// ========== START SERVER ==========
-nextApp.prepare().then(() => {
-
-    // 📡 Receive data from ESP32
-    app.post('/api/track', (req, res) => {
-        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        console.log(`📥 HTTP Recv from ${clientIp}:`, req.body);
-        const parsed = parseMessage(req.body);
-        handleData(parsed);
         res.send('OK');
     });
 
-    // 📋 Get all devices (for Dashboard)
     app.get('/api/devices', (req, res) => {
-        db.all("SELECT * FROM devices ORDER BY last_update DESC", [], (err, rows) => {
+        db.all("SELECT * FROM devices", [], (err, rows) => {
             if (err) return res.status(500).json({ error: err.message });
-            res.json(rows || []);
+            res.json(rows);
         });
     });
 
-    // 📋 Get single device
-    app.get('/api/device/:id', (req, res) => {
-        db.get("SELECT * FROM devices WHERE device_id = ?", [req.params.id], (err, row) => {
-            if (err) return res.status(500).json({ error: err.message });
-            if (!row) return res.status(404).json({ error: "Device not found" });
-            try { row.sos_numbers = JSON.parse(row.sos_numbers || '[]'); } catch (e) { row.sos_numbers = []; }
-            res.json(row);
-        });
-    });
-
-    // 📜 Get device history/logs
     app.get('/api/history/:id', (req, res) => {
-        const limit = parseInt(req.query.limit) || 500;
-        db.all("SELECT * FROM logs WHERE device_id = ? ORDER BY timestamp DESC LIMIT ?",
-            [req.params.id, limit], (err, rows) => {
-                if (err) return res.status(500).json({ error: err.message });
-                res.json(rows || []);
-            });
-    });
-
-    // 📝 Register device (owner name, license plate)
-    app.post('/api/device/:id/register', (req, res) => {
-        const { owner_name, license_plate } = req.body;
-        db.run(`UPDATE devices SET owner_name = ?, license_plate = ? WHERE device_id = ?`,
-            [owner_name || '', license_plate || '', req.params.id], function (err) {
-                if (err) return res.status(500).json({ error: err.message });
-                io.emit('device_update', { device_id: req.params.id, registered: true });
-                res.json({ success: true });
-            });
-    });
-
-    // 🆘 Update SOS numbers
-    app.post('/api/device/:id/sos', (req, res) => {
-        const { numbers } = req.body;
-        if (!Array.isArray(numbers)) return res.status(400).json({ error: "Invalid format" });
-
-        const json = JSON.stringify(numbers.slice(0, 3));
-        db.run("UPDATE devices SET sos_numbers = ? WHERE device_id = ?", [json, req.params.id], function (err) {
+        const limit = req.query.limit || 100;
+        db.all("SELECT * FROM logs WHERE device_id = ? ORDER BY timestamp DESC LIMIT ?", [req.params.id, limit], (err, rows) => {
             if (err) return res.status(500).json({ error: err.message });
-            io.emit('device_update', { device_id: req.params.id, sos_update: true });
-            res.json({ success: true, numbers: JSON.parse(json) });
+            res.json(rows);
         });
     });
 
-    // ========== CREDENTIAL SYSTEM ==========
-
-    // 🔑 Generate credential code (Admin)
-    app.post('/api/admin/credential', (req, res) => {
-        const { device_id } = req.body;
-        if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-        // Generate 6-character code
-        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-
-        db.run(`INSERT INTO credentials (code, device_id) VALUES (?, ?)`,
-            [code, device_id], function (err) {
-                if (err) return res.status(500).json({ error: err.message });
-                res.json({ success: true, code, device_id });
-            });
-    });
-
-    // 🔑 Get all credentials (Admin)
-    app.get('/api/admin/credentials', (req, res) => {
-        db.all(`SELECT c.*, v.plate_number, v.driver_name 
-                FROM credentials c 
-                LEFT JOIN vehicles v ON c.code = v.credential_code
-                ORDER BY c.created_at DESC`, [], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json(rows || []);
-        });
-    });
-
-    // 🔐 Verify credential code (User)
-    app.post('/api/user/verify', (req, res) => {
-        const { code } = req.body;
-        if (!code) return res.status(400).json({ error: "code required" });
-
-        db.get("SELECT * FROM credentials WHERE code = ?", [code.toUpperCase()], (err, row) => {
-            if (err) return res.status(500).json({ error: err.message });
-            if (!row) return res.status(404).json({ error: "Invalid code" });
-
-            // Check if already registered
-            db.get("SELECT * FROM vehicles WHERE credential_code = ?", [code.toUpperCase()], (err2, vehicle) => {
-                res.json({
-                    valid: true,
-                    device_id: row.device_id,
-                    is_registered: row.is_registered === 1,
-                    vehicle: vehicle || null
-                });
-            });
-        });
-    });
-
-    // 📱 Login with Phone Number (Check if user exists)
-    app.post('/api/user/login', (req, res) => {
-        const { phone_number } = req.body;
-        if (!phone_number) return res.status(400).json({ error: "Phone number required" });
-
-        // Check if any vehicle is linked to this phone number (user_token)
-        db.all("SELECT * FROM vehicles WHERE user_token = ?", [phone_number], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
-            if (rows && rows.length > 0) {
-                // User exists, return vehicles for auto-login
-                res.json({ exists: true, user_token: phone_number, count: rows.length });
-            } else {
-                // New user
-                res.json({ exists: false });
-            }
-        });
-    });
-
-    // 📝 Register vehicle (First time / New User)
-    app.post('/api/user/register', (req, res) => {
-        const { code, plate_number, driver_name, emergency_phone, phone_number } = req.body;
-
-        // phone_number MUST be provided as it becomes the user_token
-        if (!code || !plate_number || !phone_number) {
-            return res.status(400).json({ error: "Missing required fields (code, plate, phone)" });
-        }
-
-        // Verify credential exists
-        db.get("SELECT * FROM credentials WHERE code = ?", [code.toUpperCase()], (err, cred) => {
-            if (err) return res.status(500).json({ error: err.message });
-            if (!cred) return res.status(404).json({ error: "Invalid credential" });
-
-            const vehicleName = `${plate_number} - ${driver_name || 'Driver'}`;
-            const token = phone_number; // Use Phone Number as Token
-
-            // Insert vehicle
-            db.run(`INSERT INTO vehicles (credential_code, device_id, plate_number, driver_name, emergency_phone, vehicle_name, user_token)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [code.toUpperCase(), cred.device_id, plate_number, driver_name || '', emergency_phone || '', vehicleName, token],
-                function (err) {
-                    if (err) return res.status(500).json({ error: err.message });
-
-                    // Mark credential as registered
-                    db.run("UPDATE credentials SET is_registered = 1 WHERE code = ?", [code.toUpperCase()]);
-
-                    res.json({
-                        success: true,
-                        user_token: token,
-                        vehicle: {
-                            device_id: cred.device_id,
-                            plate_number,
-                            driver_name,
-                            vehicle_name: vehicleName
-                        }
-                    });
-                });
-        });
-    });
-
-    // 🚗 Get user's vehicles (User)
-    app.get('/api/user/vehicles', (req, res) => {
-        const token = req.query.token || req.headers['x-user-token'];
-        if (!token) return res.status(400).json({ error: "Token required" });
-
-        db.all(`SELECT v.*, d.lat, d.lng, d.status, d.last_update
-                FROM vehicles v
-                LEFT JOIN devices d ON v.device_id = d.device_id
-                WHERE v.user_token = ?
-                ORDER BY v.created_at DESC`, [token], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json(rows || []);
-        });
-    });
-
-    // ➕ Add vehicle to user account
-    app.post('/api/user/add-vehicle', (req, res) => {
-        const { code, plate_number, driver_name, emergency_phone, user_token } = req.body;
-        if (!code || !plate_number || !user_token) {
-            return res.status(400).json({ error: "Missing required fields" });
-        }
-
-        // Use existing register logic but with existing token
-        db.get("SELECT * FROM credentials WHERE code = ?", [code.toUpperCase()], (err, cred) => {
-            if (err) return res.status(500).json({ error: err.message });
-            if (!cred) return res.status(404).json({ error: "Invalid credential" });
-            if (cred.is_registered) return res.status(400).json({ error: "Credential already used" });
-
-            const vehicleName = `${plate_number} - ${driver_name || 'รถใหม่'}`;
-
-            db.run(`INSERT INTO vehicles (credential_code, device_id, plate_number, driver_name, emergency_phone, vehicle_name, user_token)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [code.toUpperCase(), cred.device_id, plate_number, driver_name || '', emergency_phone || '', vehicleName, user_token],
-                function (err) {
-                    if (err) return res.status(500).json({ error: err.message });
-
-                    db.run("UPDATE credentials SET is_registered = 1 WHERE code = ?", [code.toUpperCase()]);
-
-                    res.json({
-                        success: true,
-                        vehicle: {
-                            device_id: cred.device_id,
-                            plate_number,
-                            driver_name,
-                            vehicle_name: vehicleName
-                        }
-                    });
-                });
-        });
-    });
-
-    // 🗑️ Clear all data
-    app.post('/api/clear', (req, res) => {
-        db.serialize(() => {
-            db.run("DELETE FROM logs");
-            db.run("DELETE FROM devices");
-            // Keep users/vehicles/geofences usually, but if full reset needed:
-            // db.run("DELETE FROM vehicles");
-            // db.run("DELETE FROM geofences");
-        });
-        io.emit('clear_data');
-        console.log("🗑️ Database cleared");
-        res.json({ success: true });
-    });
-
-    // ========== GEOFENCE API ==========
-
-    // 🛡️ Get Geofences
-    app.get('/api/geofence/:device_id', (req, res) => {
-        db.all("SELECT * FROM geofences WHERE device_id = ?", [req.params.device_id], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json(rows || []);
-        });
-    });
-
-    // 🛡️ Add/Update Geofence (Max 3)
-    app.post('/api/geofence', (req, res) => {
-        const { device_id, name, lat, lng, radius } = req.body;
-        if (!device_id || !name || !lat || !lng || !radius) return res.status(400).json({ error: "Missing fields" });
-
-        db.all("SELECT * FROM geofences WHERE device_id = ?", [device_id], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
-
-            if (rows.length >= 3) {
-                return res.status(400).json({ error: "Maximum 3 geofences allowed. Please delete one first." });
-            }
-
-            // Calculate initial status
-            let initialIsInside = false;
-            db.get("SELECT lat, lng FROM devices WHERE device_id = ?", [device_id], (err, dev) => {
-                if (dev && dev.lat && dev.lng) {
-                    const dist = getDistanceFromLatLonInKm(lat, lng, dev.lat, dev.lng) * 1000;
-                    if (dist <= radius) initialIsInside = true;
-                }
-
-                db.run("INSERT INTO geofences (device_id, name, lat, lng, radius, is_inside) VALUES (?, ?, ?, ?, ?, ?)",
-                    [device_id, name, lat, lng, radius, initialIsInside ? 1 : 0], function (err) {
-                        if (err) return res.status(500).json({ error: err.message });
-                        console.log(`🛡️ Added Fence: ${name} for ${device_id} (Initial Inside: ${initialIsInside})`);
-                        res.json({ success: true, id: this.lastID });
-                    });
-            });
-        });
-    });
-
-    // 🛡️ Delete Geofence
-    app.delete('/api/geofence/:id', (req, res) => {
-        db.run("DELETE FROM geofences WHERE id = ?", [req.params.id], function (err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ success: true });
-        });
-    });
-
-    // 🔌 WebSocket
+    // ========== SOCKET.IO ==========
     io.on('connection', (socket) => {
         console.log('🔗 Client connected:', socket.id);
+
         socket.on('message', (msg) => {
-            const parsed = parseMessage(msg);
-            handleData(parsed);
+            // Handle raw socket message from devices
+            // Format: "MAC,STATUS LAT, LNG, TIMESTAMP"
+            // Example: "AA:BB:CC:DD:EE:FF,1 14.356857, 100.610772, 1234567890"
+
+            let deviceId = "unknown";
+            let lat = null;
+            let lng = null;
+            let status = "0";
+            let timestamp = null;
+            let rawContent = typeof msg === 'string' ? msg.trim() : JSON.stringify(msg);
+
+            if (typeof msg === 'string') {
+                const trimmed = msg.trim();
+
+                // Try JSON first
+                if (trimmed.startsWith('{')) {
+                    try {
+                        const json = JSON.parse(trimmed);
+                        deviceId = json.deviceId || json.device_id || json.mac || "unknown";
+                        lat = parseFloat(json.lat || json.latitude) || null;
+                        lng = parseFloat(json.lng || json.longitude) || null;
+                        status = String(json.status || json.type || "0");
+                        timestamp = json.timestamp ? new Date(json.timestamp * 1000) : null;
+                    } catch (e) { }
+                } else {
+                    // Parse: "MAC,STATUS LAT, LNG, TIMESTAMP"
+                    const parts = trimmed.split(/[, ]+/).filter(p => p.trim() !== '');
+
+                    if (parts.length >= 4) {
+                        deviceId = parts[0]; // MAC Address
+                        status = parts[1];   // Status code
+                        lat = parseFloat(parts[2]) || null;
+                        lng = parseFloat(parts[3]) || null;
+
+                        // TIMESTAMP (parts[4]) is Unix Timestamp in SECONDS
+                        if (parts.length >= 5) {
+                            const ts = parseInt(parts[4]);
+                            if (!isNaN(ts) && ts > 0) {
+                                timestamp = new Date(ts * 1000); // Convert to MS
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Map status codes to labels
+            const statusMap = {
+                '0': 'UNKNOWN',
+                '1': 'STOLEN',
+                '2': 'CRASH',
+                '3': 'NORMAL'
+            };
+            const statusLabel = statusMap[status] || status;
+
+            handleData({ deviceId, lat, lng, status: statusLabel, rawContent, timestamp });
         });
+
         socket.on('disconnect', () => {
             console.log('❌ Client disconnected:', socket.id);
         });
@@ -777,10 +364,12 @@ nextApp.prepare().then(() => {
     });
 
     // Next.js handler
-    app.all(/(.*)/, (req, res) => handle(req, res));
+    app.all('*', (req, res) => {
+        return handle(req, res);
+    });
 
     server.listen(PORT, (err) => {
         if (err) throw err;
-        console.log(`🚀 Server ready on http://localhost:${PORT}`);
+        console.log(`> Ready on http://localhost:${PORT}`);
     });
 });
