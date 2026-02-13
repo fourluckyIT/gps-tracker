@@ -345,7 +345,11 @@ nextApp.prepare().then(() => {
         const { deviceId, lat, lng, status, rawContent, timestamp } = data;
 
         // Validate
-        if (!deviceId || lat === null || lng === null) return;
+        // Validate format (Must confirm it's a MAC Address or at least has colons)
+        if (!deviceId || !deviceId.includes(':') || lat === null || lng === null) {
+            console.log(`[Skipping] Invalid Data: ${deviceId}`);
+            return;
+        }
 
         const eventTime = timestamp ? timestamp.toISOString() : new Date().toISOString();
 

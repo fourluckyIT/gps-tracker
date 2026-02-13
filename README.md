@@ -1,36 +1,145 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 📡 GPS Tracker System (IoT + Next.js)
 
-## Getting Started
+ระบบติดตามรถยนต์ GPS Tracking System แบบ Real-time พร้อมระบบแจ้งเตือนการโจรกรรม ผ่านหน้าเว็บและเสียงแจ้งเตือน
 
-First, run the development server:
+## ✨ ฟีเจอร์หลัก (Features)
+1. **Real-time Tracking**: ดูตำแหน่งรถปัจจุบันผ่าน Google Maps
+2. **Status Monitoring**: แสดงสถานะรถ (ปกติ, ถูกโจรกรรม, อุบัติเหตุ) สีตามความเร่งด่วน
+3. **Alert System**: 
+   - 🔊 **เสียงแจ้งเตือน:** เมื่อรถถูกโจรกรรม จะมีเสียงไซเรนดังวนลูป
+   - 🔴 **Popup แดง:** แจ้งเตือนหน้าจอทันทีเมื่อมีเหตุ
+   - 📲 **Push Notification:** แจ้งเตือนผ่าน Browser แม้พับหน้าจอ
+4. **History Log**: ดูประวัติย้อนหลัง เรียงลำดับถูกต้องแม่นยำ (ตัด Log ซ้ำอัตโนมัติ)
+5. **Admin Panel**: ระบบจัดการผู้ใช้และสร้างรหัส (Credential) สำหรับลงทะเบียนอุปกรณ์
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+---
+
+## 🛠️ วิธีการใช้งาน (How to Use)
+
+### 1. ฝั่งผู้ใช้งาน (User)
+- **ลงทะเบียนรถใหม่:**
+  - กดปุ่ม `+ เพิ่มรถ`
+  - กรอก **รหัส 6 หลัก** (ขอจาก Admin)
+  - ตั้งชื่อรถและทะเบียน
+- **การดูตำแหน่ง:**
+  - เลือกรถที่ต้องการจากแถบด้านบน
+  - แผนที่จะเลื่อนไปหาตำแหน่งรถอัตโนมัติ
+- **การรับมือแจ้งเตือน:**
+  - หากมีเสียงไซเรนและ Popup แดงขึ้น แสดงว่ารถถูกโจรกรรม
+  - กดปุ่ม **"รับทราบ"** เพื่อปิดเสียงและ Popup
+  - หากสถานะรถกลับมาเป็น "ปกติ" เกิน 15 วินาที เสียงจะหยุดเองอัตโนมัติ
+
+### 2. ฝั่งผู้ดูแลระบบ (Admin)
+- เข้าสู่ระบบผ่าน `/admin`
+- **การสร้างรหัส (Credential):**
+  - ดูที่ตารางอุปกรณ์
+  - หากช่อง Credential เป็นปุ่มสีม่วง **"สร้างรหัส"** -> ให้กดเพื่อสร้างเลข 6 หลัก
+  - ส่งเลขนี้ให้ User นำไปลงทะเบียน
+  - หากขึ้นเป็นเลขสีเหลือง/เขียว แสดงว่ามีรหัสอยู่แล้ว
+
+---
+
+## 🚦 เงื่อนไขและสถานะ (Conditions)
+
+ระบบจะเปลี่ยนสถานะตามข้อมูลที่ส่งมาจากกล่อง GPS (ESP32):
+
+| Status | Code | ความหมาย | การทำงานของ App |
+| :--- | :--- | :--- | :--- |
+| **NORMAL** | `3` | ปกติ | แสดงสีเขียว, ไม่มีเสียง |
+| **STOLEN** | `1` | ถูกโจรกรรม | **สีแดง**, 🔊 มีเสียง, 🔴 มี Popup, 📲 Push Notify |
+| **CRASH** | `2` | อุบัติเหตุ | **สีส้ม**, 🔊 มีเสียง, 🔴 มี Popup |
+| **OFFLINE** | - | ขาดการติดต่อ | แสดงเป็นสีเทา (Offline) |
+
+**Logic เสียงแจ้งเตือน:**
+- เสียงจะดังเมื่อสถานะเป็น **STOLEN** หรือ **CRASH**
+- เสียงจะหยุดเมื่อ:
+  1. กดปุ่ม "รับทราบ"
+  2. หรือ สถานะกลับมาเป็น **NORMAL**
+
+---
+
+## 💻 โค้ดอุปกรณ์ (ESP32 Device Code)
+
+โค้ดสำหรับบอร์ด ESP32 เพื่อส่งค่า GPS และสถานะไปยัง Server
+
+### `gps_tracker.ino`
+
+```cpp
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <TinyGPS++.h>
+
+// --- Config ---
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+const char* serverUrl = "http://YOUR_SERVER_IP:3000/api/track";
+String deviceId = "0B:72:A0:58:53:19"; // MAC Address
+
+// --- Valid Pins (ESP32) ---
+#define RXPin 16
+#define TXPin 17
+#define STATUS_PIN 4 // Switch Input (High/Low)
+
+TinyGPSPlus gps;
+HardwareSerial neogps(1);
+
+void setup() {
+  Serial.begin(115200);
+  neogps.begin(9600, SERIAL_8N1, RXPin, TXPin);
+  pinMode(STATUS_PIN, INPUT_PULLUP);
+
+  // Connect WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting WiFi...");
+  }
+}
+
+void loop() {
+  // Read GPS
+  while (neogps.available()) {
+    gps.encode(neogps.read());
+  }
+
+  if (gps.location.isUpdated()) {
+    // Read Status Switch (0 = Alert, 1 = Normal)
+    int swState = digitalRead(STATUS_PIN);
+    String status = (swState == LOW) ? "1" : "3"; // 1=Stolen, 3=Normal
+
+    if(WiFi.status() == WL_CONNECTED){
+      HTTPClient http;
+      http.begin(serverUrl);
+      http.addHeader("Content-Type", "text/plain");
+      
+      // Format: MAC,STATUS LAT, LNG, TIMESTAMP (Optional)
+      String payload = deviceId + "," + status + " " + 
+                       String(gps.location.lat(), 6) + ", " + 
+                       String(gps.location.lng(), 6);
+      
+      int httpResponseCode = http.POST(payload);
+      Serial.print("Sent: "); Serial.println(payload);
+      http.end();
+    }
+  }
+  delay(1000); // Send every 1 second
+}
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## 🚀 การติดตั้งและรัน Server
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+# 1. ติดตั้ง Package
+npm install
 
-## Learn More
+# 2. รัน Server
+npm run dev
+# หรือ
+node server.js
+```
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+**หมายเหตุ:**
+- ต้องรัน Server ตลอดเพื่อให้ Socket ทำงาน
+- Database ใช้ `tracker.db` (SQLite) ไม่ต้องลงโปรแกรมเพิ่ม

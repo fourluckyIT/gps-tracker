@@ -66,12 +66,6 @@ const formatThaiTime = (timestamp) => {
     });
 };
 
-const playAlertSound = () => {
-    try {
-        const audio = new Audio('/alert.mp3'); // Need to ensure file exists or use Base64
-        audio.play().catch(e => console.error("Audio play failed", e));
-    } catch (e) { console.error(e); }
-};
 function MapContent() {
     const router = useRouter();
 
@@ -138,8 +132,38 @@ function MapContent() {
     const [addCarForm, setAddCarForm] = useState({ code: "", plate: "" });
     const [addCarLoading, setAddCarLoading] = useState(false);
 
+    // Alert Popup State
+    const [alertPopup, setAlertPopup] = useState({ open: false, status: '', license: '' });
+
+    // Request Notification Permission
+    useEffect(() => {
+        if ("Notification" in window && Notification.permission !== "granted") {
+            Notification.requestPermission();
+        }
+    }, []);
+
     // Address
     const [address, setAddress] = useState("กำลังค้นหาที่อยู่...");
+
+    // Sound Alert Control
+    const audioRef = useRef(null);
+
+    const playAlertSound = () => {
+        try {
+            if (!audioRef.current) {
+                audioRef.current = new Audio('/alert.mp3');
+                audioRef.current.loop = true; // Loop until acknowledged
+            }
+            audioRef.current.play().catch(e => console.error("Audio play failed", e));
+        } catch (e) { console.error(e); }
+    };
+
+    const stopAlertSound = () => {
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+        }
+    };
 
     // Google Maps Loader
     const { isLoaded, loadError } = useJsApiLoader({
@@ -256,9 +280,23 @@ function MapContent() {
                 }
 
                 // Sound Alert for Danger Status
+                // Sound Alert & Popup for Danger Status
+                const s = String(data.status).toLowerCase();
                 if (s === '1' || s === 'stolen' || s === '2' || s === 'crash') {
                     playAlertSound();
-                    toast(getStatusLabel(s).text, { icon: s === 'crash' ? '💥' : '🚨', duration: 5000 });
+                    setAlertPopup({ open: true, status: s, license: data.license_plate || 'ทะเบียนไม่ระบุ' });
+
+                    // Browser Push Notification
+                    if (Notification.permission === "granted") {
+                        new Notification("🚨 แจ้งเตือนด่วน!", {
+                            body: `รถ ${data.license_plate || ''} มีสถานะ: ${getStatusLabel(s).text}`,
+                            icon: "/logo.png"
+                        });
+                    }
+                } else if (s === '3' || s === 'normal') {
+                    // Auto-stop sound if status back to normal
+                    stopAlertSound();
+                    setAlertPopup(prev => ({ ...prev, open: false }));
                 }
 
                 // Update History Real-time (Prepend to top)
@@ -406,11 +444,12 @@ function MapContent() {
             setCarStatus('NORMAL');
             toast.success("🚗 รถปลอดภัยแล้ว (ไม่พบการเคลื่อนไหว)", { icon: '✅', duration: 4000 });
 
-            fetch(`${SERVER_URL}/api/device/${deviceId}/status`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: 'NORMAL' })
-            }).catch(console.error);
+            // Remove excessive POST to prevent log spam
+            // fetch(`${SERVER_URL}/api/device/${deviceId}/status`, {
+            //     method: 'POST',
+            //     headers: { 'Content-Type': 'application/json' },
+            //     body: JSON.stringify({ status: 'NORMAL' })
+            // }).catch(console.error);
         }, 15000);
 
         return () => clearTimeout(timer);
@@ -836,7 +875,29 @@ function MapContent() {
                 </div>
             )}
 
-            {/* History Popup (Reused) */}
+            {/* Danger Alert Popup */}
+            {alertPopup.open && (
+                <div className={styles.overlay} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div className={styles.card} style={{ width: '85%', maxWidth: '350px', padding: '20px', textAlign: 'center', border: '3px solid #FF0000', animation: 'pulse 1s infinite' }}>
+                        <div style={{ fontSize: '48px', marginBottom: '10px' }}>🚨</div>
+                        <h2 style={{ color: '#FF0000', marginBottom: '10px' }}>แจ้งเตือนด่วน!</h2>
+                        <h3 style={{ marginBottom: '5px' }}>รถทะเบียน: {alertPopup.license}</h3>
+                        <p style={{ fontSize: '18px', fontWeight: 'bold' }}>สถานะ: {getStatusLabel(alertPopup.status).text}</p>
+                        <p style={{ fontSize: '14px', color: '#666', marginTop: '10px' }}>กรุณาตรวจสอบทันที!</p>
+
+                        <button
+                            className={styles.btnPrimary}
+                            style={{ marginTop: '20px', width: '100%', backgroundColor: '#FF0000' }}
+                            onClick={() => {
+                                setAlertPopup({ ...alertPopup, open: false });
+                                stopAlertSound();
+                            }}
+                        >
+                            รับทราบ
+                        </button>
+                    </div>
+                </div>
+            )}
             {historyOpen && (
                 <div className={styles.overlay} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div className={styles.card} style={{ width: '90%', maxHeight: '70vh', overflowY: 'auto' }}>
@@ -849,6 +910,12 @@ function MapContent() {
                                 const tA = (a.timestamp || a.last_update || '').replace(' ', 'T');
                                 const tB = (b.timestamp || b.last_update || '').replace(' ', 'T');
                                 return new Date(tB) - new Date(tA);
+                            }).filter((log, index, array) => {
+                                if (index === 0) return true;
+                                const prevLog = array[index - 1];
+                                const t1 = (log.timestamp || log.last_update || '').replace(' ', 'T');
+                                const t2 = (prevLog.timestamp || prevLog.last_update || '').replace(' ', 'T');
+                                return t1 !== t2;
                             }).map((log, i) => (
                                 <li key={i} style={{ padding: '12px', borderBottom: '1px solid #eee', fontSize: 13 }}>
                                     <div style={{ fontWeight: 'bold', color: '#333' }}>
