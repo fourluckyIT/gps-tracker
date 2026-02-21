@@ -45,6 +45,9 @@ const requireAuth = (req, res, next) => {
     const pathToCheck = req.originalUrl.split('?')[0];
     if (publicPaths.includes(pathToCheck)) return next();
 
+    // Allow all /api/test/* routes (read-only test endpoints)
+    if (pathToCheck.startsWith('/api/test/')) return next();
+
     // Check cookie
     const token = req.cookies.admin_token;
     if (token === 'AUTHENTICATED') {
@@ -750,6 +753,78 @@ nextApp.prepare().then(() => {
                     res.json({ success: true });
                 });
         });
+    });
+
+    // ========== TEST ENDPOINTS (Read-Only, No Auth) ==========
+
+    // 🧪 Get all devices with credential info (for test dashboard)
+    app.get('/api/test/devices', (req, res) => {
+        const query = `
+            SELECT 
+                d.*,
+                c.code as credential_code,
+                c.is_registered,
+                v.plate_number,
+                v.driver_name as owner_name_v
+            FROM devices d
+            LEFT JOIN credentials c ON d.device_id = c.device_id
+            LEFT JOIN vehicles v ON d.device_id = v.device_id
+            ORDER BY d.last_update DESC
+        `;
+        db.all(query, [], (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            const devices = (rows || []).map(row => ({
+                device_id: row.device_id,
+                lat: row.lat,
+                lng: row.lng,
+                status: row.status,
+                owner_name: row.owner_name || row.owner_name_v || '',
+                license_plate: row.license_plate || row.plate_number || '',
+                credential_code: row.credential_code || null,
+                is_registered: row.is_registered || 0,
+                last_update: row.last_update,
+                sos_numbers: row.sos_numbers ? JSON.parse(row.sos_numbers) : []
+            }));
+            res.json(devices);
+        });
+    });
+
+    // 🧪 Get user devices by phone (for test my-devices page)
+    app.get('/api/test/user-devices', (req, res) => {
+        const phone = req.query.phone;
+        if (!phone) return res.status(400).json({ error: 'phone query param required' });
+        db.all(`SELECT v.*, d.lat, d.lng, d.status, d.last_update
+                FROM vehicles v
+                LEFT JOIN devices d ON v.device_id = d.device_id
+                WHERE v.user_token = ?
+                ORDER BY v.created_at DESC`, [phone], (err, rows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(rows || []);
+        });
+    });
+
+    // 🧪 Get single device detail (for test detail page)
+    app.get('/api/test/device/:id', (req, res) => {
+        db.get(`SELECT d.*, c.code as credential_code, v.plate_number, v.driver_name, v.emergency_phone
+                FROM devices d
+                LEFT JOIN credentials c ON d.device_id = c.device_id
+                LEFT JOIN vehicles v ON d.device_id = v.device_id
+                WHERE d.device_id = ?`, [req.params.id], (err, row) => {
+            if (err) return res.status(500).json({ error: err.message });
+            if (!row) return res.status(404).json({ error: 'Device not found' });
+            try { row.sos_numbers = JSON.parse(row.sos_numbers || '[]'); } catch (e) { row.sos_numbers = []; }
+            res.json(row);
+        });
+    });
+
+    // 🧪 Get device history (for test detail page)
+    app.get('/api/test/history/:id', (req, res) => {
+        const limit = parseInt(req.query.limit) || 50;
+        db.all("SELECT * FROM logs WHERE device_id = ? ORDER BY timestamp DESC LIMIT ?",
+            [req.params.id, limit], (err, rows) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json(rows || []);
+            });
     });
 
     // Next.js handler
