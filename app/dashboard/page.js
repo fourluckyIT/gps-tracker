@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Search, Loader2, Wifi, WifiOff, MapPin, Clock, ChevronRight, LayoutDashboard, Car } from "lucide-react";
+import toast, { Toaster } from "react-hot-toast";
+import { Search, Loader2, Wifi, WifiOff, MapPin, Clock, ChevronRight, LayoutDashboard, Car, Plus } from "lucide-react";
 
 const SERVER_URL = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
     ? window.location.origin
@@ -58,6 +59,25 @@ export default function TestDashboard() {
         }
     };
 
+    const generateCredential = async (deviceId) => {
+        try {
+            const res = await fetch(`${SERVER_URL}/api/admin/credential`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ device_id: deviceId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                toast.success(`สร้าง Credential สำเร็จ (รหัส: ${data.code})`);
+                fetchDevices();
+            } else {
+                toast.error(data.error || "เกิดข้อผิดพลาด");
+            }
+        } catch (err) {
+            toast.error("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์");
+        }
+    };
+
     const filtered = devices.filter(d => {
         if (!search) return true;
         const q = search.toLowerCase();
@@ -71,6 +91,7 @@ export default function TestDashboard() {
 
     return (
         <div style={{ minHeight: '100vh', background: '#0a0a0a', color: 'white', fontFamily: 'system-ui, sans-serif' }}>
+            <Toaster position="top-center" />
             {/* Header */}
             <header style={{ background: '#111', borderBottom: '1px solid #222', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -159,7 +180,7 @@ export default function TestDashboard() {
                                                 <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                                     {device.credential_code
                                                         ? <span style={{ fontFamily: 'monospace', color: '#FBBF24', background: '#1a1a2e', padding: '2px 8px', borderRadius: '4px' }}>{device.credential_code}</span>
-                                                        : <span style={{ color: '#555' }}>-</span>}
+                                                        : <button onClick={() => generateCredential(device.device_id)} style={{ background: '#3B82F6', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', margin: '0 auto' }}><Plus size={14} /> สร้าง</button>}
                                                 </td>
                                                 <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                                     <span style={{ padding: '4px 10px', borderRadius: '20px', fontSize: '0.75rem', background: cfg.bg, color: cfg.color }}>{cfg.label}</span>
