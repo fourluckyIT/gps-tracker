@@ -80,11 +80,6 @@ export default function TestDashboard() {
                         <span style={{ fontSize: '0.7rem', background: '#F59E0B', color: 'black', padding: '2px 8px', borderRadius: '4px', marginLeft: '8px', verticalAlign: 'middle' }}>NO AUTH</span>
                     </h1>
                 </div>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                    <Link href="/test/my-devices" style={{ background: '#1a1a2e', color: '#818cf8', border: '1px solid #333', padding: '8px 16px', borderRadius: '8px', textDecoration: 'none', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Car size={16} /> My Devices
-                    </Link>
-                </div>
             </header>
 
             <main style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -177,10 +172,10 @@ export default function TestDashboard() {
                                                 <td style={{ padding: '14px 16px', color: '#888', fontSize: '0.85rem' }}>{formatTime(device.last_update)}</td>
                                                 <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                                                     <Link
-                                                        href={`/test/device/${encodeURIComponent(device.device_id)}`}
+                                                        href={`/v2/map?id=${encodeURIComponent(device.device_id)}`}
                                                         style={{ color: '#3B82F6', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center', fontSize: '0.85rem' }}
                                                     >
-                                                        ดูรายละเอียด <ChevronRight size={16} />
+                                                        ดูโหมดติดตามรถ <ChevronRight size={16} />
                                                     </Link>
                                                 </td>
                                             </tr>
