@@ -10,6 +10,7 @@ import {
     Menu, X, MapPin, Crosshair, Plus, Trash2, Edit3, Check, Clock, Car, Navigation, History as HistoryIcon, Shield, ShieldAlert, AlertTriangle
 } from "lucide-react";
 import styles from "./Map.module.css";
+import PermissionGate from "../components/PermissionGate";
 
 // Config
 const SERVER_URL = typeof window !== 'undefined'
@@ -61,6 +62,7 @@ function MapContent() {
 
     // UI state
     const [menuOpen, setMenuOpen] = useState(false);
+    const [hasStreetView, setHasStreetView] = useState(false);
 
     // Geofence state
     const [geofences, setGeofences] = useState([null, null, null]);
@@ -86,6 +88,44 @@ function MapContent() {
     // Address
     const [address, setAddress] = useState("กำลังค้นหาที่อยู่...");
 
+    // Add Car Modal
+    const [addCarModalOpen, setAddCarModalOpen] = useState(false);
+    const [addCarForm, setAddCarForm] = useState({ code: "", plate: "", driver: "" });
+    const [addCarLoading, setAddCarLoading] = useState(false);
+
+    const handleAddCarSubmit = async () => {
+        if (!addCarForm.code || !addCarForm.plate) {
+            toast.error("กรุณากรอกรหัสประจำเครื่องและเลขทะเบียนรถ");
+            return;
+        }
+
+        setAddCarLoading(true);
+        try {
+            const res = await fetch(`${SERVER_URL}/api/user/add-vehicle`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    code: addCarForm.code,
+                    plate_number: addCarForm.plate,
+                    driver_name: addCarForm.driver,
+                    user_token: localStorage.getItem("gps_user_phone")
+                })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                toast.success("เพิ่มรถสำเร็จ! ระบบจะทำการรีเฟรช...");
+                setAddCarModalOpen(false);
+                setTimeout(() => window.location.reload(), 1500);
+            } else {
+                toast.error(data.error || "ไม่สามารถเพิ่มรถได้ ตรวจสอบรหัสอีกครั้ง");
+            }
+        } catch (e) {
+            toast.error("เกิดข้อผิดพลาดในการเชื่อมต่อ");
+        }
+        setAddCarLoading(false);
+    };
+
     // Google Maps Loader
     const { isLoaded, loadError } = useJsApiLoader({
         googleMapsApiKey: GOOGLE_MAPS_API_KEY,
@@ -102,6 +142,16 @@ function MapContent() {
                 setAddress(results[0].formatted_address);
             } else {
                 setAddress("ไม่พบข้อมูลที่อยู่");
+            }
+        });
+
+        // Check for Street View availability
+        const svService = new window.google.maps.StreetViewService();
+        svService.getPanorama({ location: carPosition, radius: 50 }, (data, status) => {
+            if (status === 'OK') {
+                setHasStreetView(true);
+            } else {
+                setHasStreetView(false);
             }
         });
     }, [carPosition, isLoaded]);
@@ -309,6 +359,12 @@ function MapContent() {
         window.open(url, '_blank');
     };
 
+    const openStreetView = () => {
+        if (!carPosition || !hasStreetView) return;
+        const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${carPosition.lat},${carPosition.lng}`;
+        window.open(url, '_blank');
+    };
+
     const focusUser = () => {
         if (map && userPosition) {
             map.panTo(userPosition);
@@ -487,8 +543,16 @@ function MapContent() {
                         </div>
 
                         <div className={styles.cardActions}>
-                            <button className={styles.btnSecondary} onClick={fetchHistoryLogs}>
-                                <HistoryIcon size={20} /> ประวัติ
+                            <button className={styles.btnSecondary} onClick={fetchHistoryLogs} disabled={logsLoading}>
+                                {logsLoading ? <Loader2 size={20} className="animate-spin" /> : <HistoryIcon size={20} />} ประวัติ
+                            </button>
+                            <button
+                                className={styles.btnSecondary}
+                                onClick={openStreetView}
+                                disabled={!hasStreetView}
+                                style={{ opacity: hasStreetView ? 1 : 0.5, borderColor: hasStreetView ? '#ddd' : '#eee', background: hasStreetView ? 'white' : '#f9f9f9' }}
+                            >
+                                <MapPin size={20} color={hasStreetView ? "#4285F4" : "#ccc"} /> {hasStreetView ? "ดูภาพถนน" : "ไม่มีภาพถนน"}
                             </button>
                             <button className={styles.btnPrimary} onClick={navigateToCar}>
                                 <Navigation size={20} fill="white" /> นำทาง
@@ -496,8 +560,8 @@ function MapContent() {
                         </div>
                     </div>
 
-                    {/* CARD 2: ADD CAR (Placeholder) */}
-                    <div className={styles.addCard} onClick={() => toast("ฟีเจอร์นี้เตรียมเปิดใช้งานเร็วๆนี้")}>
+                    {/* CARD 2: ADD CAR */}
+                    <div className={styles.addCard} onClick={() => setAddCarModalOpen(true)}>
                         <div className={styles.addIconCircle}>
                             <Plus size={32} />
                         </div>
@@ -612,6 +676,50 @@ function MapContent() {
                 </div>
             )}
 
+            {/* Add Car Modal */}
+            {addCarModalOpen && (
+                <div className={styles.overlay} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div className={styles.card} style={{ width: '90%', maxWidth: '400px', padding: '24px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                            <h2 style={{ margin: 0, fontSize: '1.25rem' }}>เพิ่มรถใหม่ 🚗</h2>
+                            <button onClick={() => setAddCarModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={24} color="#666" /></button>
+                        </div>
+                        <p style={{ color: '#666', marginBottom: '20px', fontSize: '0.9rem' }}>กรอกรหัสจากอุปกรณ์ใหม่ของคุณ</p>
+
+                        <div style={{ marginBottom: '16px' }}>
+                            <input
+                                type="text"
+                                placeholder="🔑 CREDENTIAL CODE"
+                                value={addCarForm.code}
+                                onChange={(e) => setAddCarForm({ ...addCarForm, code: e.target.value.toUpperCase() })}
+                                style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px', fontSize: '1rem', fontFamily: 'monospace', fontWeight: 'bold' }}
+                            />
+                        </div>
+
+                        <div style={{ marginBottom: '16px' }}>
+                            <input
+                                type="text"
+                                placeholder="🚗 ทะเบียนรถ (Ex. กข-1234)"
+                                value={addCarForm.plate}
+                                onChange={(e) => setAddCarForm({ ...addCarForm, plate: e.target.value })}
+                                style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px', fontSize: '1rem' }}
+                            />
+                        </div>
+
+                        <div style={{ background: '#f0f7ff', color: '#0055ff', padding: '12px', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span>💡</span> ชื่อผู้ขับขี่จะใช้ข้อมูลเดิมจากบัญชีของคุณ
+                        </div>
+
+                        <button
+                            onClick={handleAddCarSubmit}
+                            disabled={addCarLoading || !addCarForm.code || !addCarForm.plate}
+                            style={{ width: '100%', padding: '14px', background: (!addCarForm.code || !addCarForm.plate) ? '#ccc' : '#007AFF', color: 'white', border: 'none', borderRadius: '8px', fontSize: '1rem', fontWeight: 'bold', cursor: (!addCarForm.code || !addCarForm.plate) ? 'not-allowed' : 'pointer' }}
+                        >
+                            {addCarLoading ? 'กำลังเพิ่มรถ...' : 'เพิ่มรถ'}
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -619,7 +727,9 @@ function MapContent() {
 export default function MapPage() {
     return (
         <Suspense fallback={<div className={styles.loadingScreen}>กำลังโหลด...</div>}>
-            <MapContent />
+            <PermissionGate>
+                <MapContent />
+            </PermissionGate>
         </Suspense>
     );
 }

@@ -82,7 +82,7 @@ export default function MobileLogin() {
     };
 
     const handleRegister = async () => {
-        if (!regForm.code || !regForm.plate || !regForm.driver) return toast.error("กรุณากรอกข้อมูลให้ครบ");
+        if (!regForm.code || !regForm.plate) return toast.error("กรุณากรอกรหัสประจำเครื่อง และเลขทะเบียนรถ");
 
         setLoading(true);
         try {
@@ -202,14 +202,8 @@ export default function MobileLogin() {
                             />
                         </div>
 
-                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
-                            <Smartphone className="text-gray-400" />
-                            <input
-                                className="flex-1 outline-none font-medium placeholder:text-sm"
-                                placeholder="ชื่อผู้ขับขี่"
-                                value={regForm.driver}
-                                onChange={(e) => setRegForm({ ...regForm, driver: e.target.value })}
-                            />
+                        <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm mb-4 border border-blue-100 flex items-start gap-2">
+                            <span>💡</span> ชื่อผู้ใช้งานจะดึงมาจากเบอร์โทรศัพท์ของคุณ
                         </div>
 
                         <button
